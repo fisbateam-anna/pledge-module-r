@@ -453,6 +453,98 @@ label textarea {
   gap: 16px;
 }
 
+.contract-card-info-grid {
+  grid-template-columns: minmax(300px, 0.72fr) minmax(640px, 1.28fr);
+}
+
+.contract-card-info-grid > .panel {
+  min-width: 0;
+}
+
+.contract-participants-panel table {
+  min-width: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.contract-participants-panel th,
+.contract-participants-panel td {
+  padding-right: 10px;
+  padding-left: 10px;
+  overflow-wrap: anywhere;
+}
+
+.contract-participants-panel th:nth-child(1),
+.contract-participants-panel td:nth-child(1) {
+  width: 16%;
+}
+
+.contract-participants-panel th:nth-child(2),
+.contract-participants-panel td:nth-child(2) {
+  width: 27%;
+}
+
+.contract-participants-panel th:nth-child(3),
+.contract-participants-panel td:nth-child(3) {
+  width: 14%;
+}
+
+.contract-participants-panel th:nth-child(4),
+.contract-participants-panel td:nth-child(4) {
+  width: 18%;
+}
+
+.contract-participants-panel th:nth-child(5),
+.contract-participants-panel td:nth-child(5) {
+  width: 25%;
+}
+
+.contract-linked-collaterals-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.contract-linked-collaterals-table th,
+.contract-linked-collaterals-table td {
+  padding-right: 10px;
+  padding-left: 10px;
+  overflow-wrap: anywhere;
+}
+
+.contract-linked-collaterals-table th:nth-child(1),
+.contract-linked-collaterals-table td:nth-child(1) {
+  width: 7%;
+}
+
+.contract-linked-collaterals-table th:nth-child(2),
+.contract-linked-collaterals-table td:nth-child(2) {
+  width: 11%;
+}
+
+.contract-linked-collaterals-table th:nth-child(3),
+.contract-linked-collaterals-table td:nth-child(3) {
+  width: 23%;
+}
+
+.contract-linked-collaterals-table th:nth-child(4),
+.contract-linked-collaterals-table td:nth-child(4) {
+  width: 15%;
+}
+
+.contract-linked-collaterals-table th:nth-child(5),
+.contract-linked-collaterals-table td:nth-child(5),
+.contract-linked-collaterals-table th:nth-child(6),
+.contract-linked-collaterals-table td:nth-child(6),
+.contract-linked-collaterals-table th:nth-child(7),
+.contract-linked-collaterals-table td:nth-child(7) {
+  width: 12%;
+}
+
+.contract-linked-collaterals-table th:nth-child(8),
+.contract-linked-collaterals-table td:nth-child(8) {
+  width: 8%;
+}
+
 .integration-grid {
   grid-template-columns: repeat(3, minmax(280px, 1fr));
 }
@@ -1213,6 +1305,27 @@ tfoot td {
   box-shadow: none;
 }
 
+.task-linked-contracts {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.task-linked-contracts h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.task-linked-contracts table {
+  font-size: 12px;
+}
+
+.task-linked-contracts th,
+.task-linked-contracts td {
+  padding: 6px;
+}
+
 .task-card-revaluation .task-detail-sidebar .panel,
 .task-card-inspection .task-detail-sidebar .panel {
   padding: 12px;
@@ -1507,6 +1620,24 @@ tfoot td {
   min-width: 0;
   min-height: 34px;
   font-size: 13px;
+}
+
+.valuation-weighted-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  max-width: 360px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.valuation-weighted-result input {
+  min-height: 40px;
+  color: var(--text);
+  background: #eef3f8;
+  font-size: 15px;
+  font-weight: 800;
 }
 
 .risk-assessment-panel .panel-title,
@@ -3495,6 +3626,7 @@ tbody tr:hover {
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
 }
 
+.monitoring-settings-panel,
 .inspection-card,
 .inspection-table,
 .valuation-history,
@@ -3504,6 +3636,7 @@ tbody tr:hover {
   overflow: hidden;
 }
 
+.monitoring-settings-panel::before,
 .inspection-card::before,
 .inspection-table::before,
 .valuation-history::before,
@@ -3516,6 +3649,15 @@ tbody tr:hover {
   height: 3px;
   content: "";
   background: var(--accent);
+}
+
+.monitoring-settings-grid {
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+}
+
+.monitoring-settings-panel input[readonly] {
+  color: var(--muted);
+  background: #eef3f8;
 }
 
 .inspection-card .info-grid div {
@@ -4388,6 +4530,7 @@ tbody tr:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px 8px;
+  align-items: start;
   padding: 8px;
   background: var(--surface-soft);
   border: 1px solid var(--line);
@@ -4404,6 +4547,14 @@ tbody tr:hover {
   margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.task-history-event .badge {
+  align-self: start;
+  min-height: 0;
+  padding: 3px 8px;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .task-history-event p {
@@ -4495,12 +4646,12 @@ tbody tr:hover {
 
 .task-collateral-info th:nth-child(1),
 .task-collateral-info td:nth-child(1) {
-  width: 8%;
+  width: 7%;
 }
 
 .task-collateral-info th:nth-child(2),
 .task-collateral-info td:nth-child(2) {
-  width: 12%;
+  width: 10%;
 }
 
 .task-collateral-info th:nth-child(3),
@@ -4510,12 +4661,12 @@ tbody tr:hover {
 
 .task-collateral-info th:nth-child(4),
 .task-collateral-info td:nth-child(4) {
-  width: 26%;
+  width: 24%;
 }
 
 .task-collateral-info th:nth-child(5),
 .task-collateral-info td:nth-child(5) {
-  width: 16%;
+  width: 14%;
 }
 
 .task-collateral-info th:nth-child(6),
@@ -4527,9 +4678,9 @@ tbody tr:hover {
 .task-collateral-info td:nth-child(7),
 .task-collateral-info th:nth-child(8),
 .task-collateral-info td:nth-child(8) {
-  width: 5.5%;
+  width: 9%;
   font-size: 11px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .task-collateral-cell {
@@ -5507,7 +5658,7 @@ tbody tr:hover {
 }
 
 .list-revaluation-table-wrap {
-  overflow-x: auto;
+  overflow-x: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
@@ -5584,16 +5735,11 @@ tbody tr:hover {
   min-height: 78px;
 }
 
-.list-revaluation-package-layout,
-.list-revaluation-main-grid {
+.list-revaluation-workflow-grid {
   display: grid;
-  grid-template-columns: minmax(340px, .95fr) minmax(380px, 1.05fr);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, .48fr);
   gap: 14px;
-  align-items: start;
-}
-
-.list-revaluation-main-grid {
-  grid-template-columns: minmax(360px, .9fr) minmax(0, 1.1fr);
+  align-items: stretch;
 }
 
 .list-revaluation-package-panel,
@@ -5604,8 +5750,29 @@ tbody tr:hover {
   min-height: 100%;
 }
 
+.list-revaluation-package-panel,
+.list-revaluation-tools-panel {
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.list-revaluation-tools-panel {
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.list-revaluation-tools-panel .list-revaluation-control-head,
+.list-revaluation-control-panel .list-revaluation-control-head {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.list-revaluation-control-panel .list-revaluation-control-head .badge {
+  justify-self: start;
+}
+
 .list-revaluation-form-grid.package-fields {
-  grid-template-columns: minmax(0, 1.35fr) minmax(190px, .65fr);
+  grid-template-columns: minmax(0, 1fr) 150px;
 }
 
 .list-revaluation-form-grid.method-fields {
@@ -5620,11 +5787,15 @@ tbody tr:hover {
 
 
 .list-revaluation-form-grid .reason-field textarea {
-  min-height: 52px;
+  min-height: 46px;
 }
 
 .list-revaluation-form-grid .comment-field textarea {
-  min-height: 64px;
+  min-height: 58px;
+}
+
+.list-revaluation-form-grid .date-field input {
+  min-width: 0;
 }
 
 .computed-list-field {
@@ -5678,6 +5849,10 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.list-revaluation-tools-panel .list-revaluation-tool-grid {
+  grid-template-columns: 1fr;
+}
+
 .list-revaluation-tool {
   display: grid;
   gap: 4px;
@@ -5691,6 +5866,10 @@ tbody tr:hover {
   cursor: pointer;
 }
 
+.list-revaluation-tools-panel .list-revaluation-tool {
+  min-height: 64px;
+  padding: 10px;
+}
 .list-revaluation-tool:hover {
   border-color: #2f6fd0;
   box-shadow: 0 8px 18px rgba(47, 111, 208, .10);
@@ -5702,6 +5881,45 @@ tbody tr:hover {
 }
 
 .list-revaluation-tool span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.list-revaluation-excel-widget {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px dashed #9db4cf;
+  border-radius: 8px;
+}
+
+.list-revaluation-excel-widget.has-file {
+  border-style: solid;
+  border-color: #86c59c;
+  background: #f4fbf6;
+}
+
+.list-revaluation-excel-widget strong,
+.list-revaluation-excel-widget span,
+.list-revaluation-excel-widget small {
+  display: block;
+  min-width: 0;
+}
+
+.list-revaluation-excel-widget strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.list-revaluation-excel-widget span,
+.list-revaluation-excel-widget small {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.3;
@@ -5827,6 +6045,10 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.list-revaluation-control-panel .list-revaluation-control-cards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .list-revaluation-control-card {
   display: grid;
   gap: 4px;
@@ -5911,27 +6133,26 @@ tbody tr:hover {
 }
 
 .list-revaluation-table.improved {
-  min-width: 1260px;
+  width: 100%;
+  min-width: 0;
 }
 
 .list-revaluation-table.improved th:nth-child(1),
-.list-revaluation-table.improved td:nth-child(1) { width: 54px; text-align: center; }
+.list-revaluation-table.improved td:nth-child(1) { width: 52px; text-align: center; }
 .list-revaluation-table.improved th:nth-child(2),
-.list-revaluation-table.improved td:nth-child(2) { width: 230px; }
+.list-revaluation-table.improved td:nth-child(2) { width: 18%; }
 .list-revaluation-table.improved th:nth-child(3),
-.list-revaluation-table.improved td:nth-child(3) { width: 145px; }
+.list-revaluation-table.improved td:nth-child(3) { width: 12%; }
 .list-revaluation-table.improved th:nth-child(4),
-.list-revaluation-table.improved td:nth-child(4) { width: 135px; }
+.list-revaluation-table.improved td:nth-child(4) { width: 12%; }
 .list-revaluation-table.improved th:nth-child(5),
-.list-revaluation-table.improved td:nth-child(5) { width: 150px; }
+.list-revaluation-table.improved td:nth-child(5) { width: 13%; }
 .list-revaluation-table.improved th:nth-child(6),
-.list-revaluation-table.improved td:nth-child(6) { width: 185px; }
+.list-revaluation-table.improved td:nth-child(6) { width: 18%; }
 .list-revaluation-table.improved th:nth-child(7),
-.list-revaluation-table.improved td:nth-child(7) { width: 170px; }
+.list-revaluation-table.improved td:nth-child(7) { width: 9%; }
 .list-revaluation-table.improved th:nth-child(8),
-.list-revaluation-table.improved td:nth-child(8) { width: 120px; }
-.list-revaluation-table.improved th:nth-child(9),
-.list-revaluation-table.improved td:nth-child(9) { width: 170px; }
+.list-revaluation-table.improved td:nth-child(8) { width: 18%; }
 
 .inline-edit-field {
   display: grid;
@@ -5955,8 +6176,7 @@ tbody tr:hover {
 }
 
 @media (max-width: 1280px) {
-  .list-revaluation-package-layout,
-  .list-revaluation-main-grid,
+  .list-revaluation-workflow-grid,
   .list-revaluation-process-grid,
   .list-revaluation-control-impact-grid {
     grid-template-columns: 1fr;
@@ -5969,8 +6189,7 @@ tbody tr:hover {
 
 @media (max-width: 860px) {
   .list-revaluation-stage-grid,
-  .list-revaluation-package-layout,
-  .list-revaluation-main-grid,
+  .list-revaluation-workflow-grid,
   .list-revaluation-process-grid,
   .list-revaluation-control-impact-grid,
   .list-revaluation-form-grid.two-cols,

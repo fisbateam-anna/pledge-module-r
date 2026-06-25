@@ -122,7 +122,7 @@ function persistTaskState() {
 }
 
 const documentRules = [
-  { title: "Заявление клиента", collateralType: "any", clientType: "any", taskType: "any", required: true },
+  { title: "Заявление клиента по договору/залогодателя", collateralType: "any", clientType: "any", taskType: "any", required: true },
   { title: "Правоустанавливающий документ", collateralType: "any", clientType: "any", taskType: "Постановка в залог", required: true },
   { title: "Акт осмотра", collateralType: "any", clientType: "any", taskType: "Первичный осмотр", required: true },
   { title: "Акт повторного осмотра", collateralType: "any", clientType: "any", taskType: "Повторный осмотр", required: true },
@@ -195,6 +195,19 @@ function parseRoute() {
   return { path, query: new URLSearchParams(query) };
 }
 
+function updateCollateralTabRoute(tab) {
+  state.collateralTab = tab || "overview";
+  const { path, query } = parseRoute();
+  if (!path.startsWith("/app/collaterals/")) {
+    render();
+    return;
+  }
+  query.set("tab", state.collateralTab);
+  const route = `${path}?${query.toString()}`;
+  if (getRoute() === route) render();
+  else window.location.hash = route;
+}
+
 function getTask(id) {
   return state.data.tasks.find((item) => item.id === id);
 }
@@ -219,6 +232,62 @@ function getTaskCollaterals(task) {
 function getTaskActiveCollateral(task, collaterals) {
   const activeId = state.taskActiveCollateral[task.id] || task.collateralId || collaterals[0]?.id;
   return collaterals.find((item) => item.id === activeId) || collaterals[0] || null;
+}
+
+function uniqueItems(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function isInternalTaskParty(value) {
+  return /управление залогов|залоговое подразделение|планировщик|система/i.test(String(value || ""));
+}
+
+function getTaskContracts(task, collaterals = getTaskCollaterals(task)) {
+  const ids = [];
+  collaterals.forEach((collateral) => ids.push(...(collateral.contractIds || [])));
+  if (!ids.length && task?.contractId) ids.push(task.contractId);
+  return uniqueItems(ids).map(getContract).filter(Boolean);
+}
+
+function getTaskActiveContracts(task, activeCollateral) {
+  const ids = activeCollateral?.contractIds?.length ? activeCollateral.contractIds : [task?.contractId].filter(Boolean);
+  return uniqueItems(ids).map(getContract).filter(Boolean);
+}
+
+function getTaskActiveContract(task, activeCollateral) {
+  return getTaskActiveContracts(task, activeCollateral)[0] || getContract(task?.contractId);
+}
+
+function getTaskContractClientNames(task, collaterals = getTaskCollaterals(task)) {
+  const names = getTaskContracts(task, collaterals).map((contract) => contract.clientName);
+  if (!names.length && task?.client && !isInternalTaskParty(task.client)) names.push(task.client);
+  return uniqueItems(names);
+}
+
+function getContractPartyRole(contract) {
+  const role = contract?.participants?.find((item) => !/залогодатель|поручитель/i.test(item.role || ""))?.role;
+  if (role) return role;
+  const product = String(contract?.product || "").toLowerCase();
+  if (product.includes("гарант")) return "Принципал";
+  if (product.includes("лизинг")) return "Лизингополучатель";
+  if (product.includes("кредит") || product.includes("ипотеч")) return "Заемщик";
+  return "Клиент по договору";
+}
+
+function summarizeNames(names, limit = 2) {
+  const unique = uniqueItems(names);
+  if (!unique.length) return "-";
+  if (unique.length <= limit) return unique.join(", ");
+  return `${unique.length} клиента по договору: ${unique.slice(0, limit).join(", ")} +${unique.length - limit}`;
+}
+
+function getTaskClientSummary(task, collaterals = getTaskCollaterals(task)) {
+  return summarizeNames(getTaskContractClientNames(task, collaterals));
+}
+
+function getTaskInitiator(task) {
+  if (task?.client && isInternalTaskParty(task.client)) return task.client;
+  return task?.source || "-";
 }
 
 function normalizeTaskType(type) {
@@ -371,7 +440,7 @@ function renderPageHeader(title, text, actions = "") {
   return `
     <div class="breadcrumbs"><button class="link" data-route="/app/tasks">Главная</button><span>/</span><span>${escapeHtml(title)}</span></div>
     <section class="page-header">
-      <div><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p></div>
+      <div><h1>${escapeHtml(title)}</h1>${text ? `<p>${escapeHtml(text)}</p>` : ""}</div>
       <div class="header-actions">${actions}</div>
     </section>
   `;
@@ -819,14 +888,18 @@ function renderTaskQueuePanel(queueRows, visibleCount, baseCount) {
       ${queueRows.length ? `
         <div class="task-queue-list">
           ${queueRows.map((task) => {
-            const collateral = getCollateral(task.collateralId);
+            const collaterals = getTaskCollaterals(task);
+            const collateral = collaterals[0] || getCollateral(task.collateralId);
+            const collateralText = collaterals.length > 1
+              ? `${collaterals.length} залогов`
+              : collateral?.description || task.collateralId || "Без объекта";
             const urgency = getTaskUrgency(task);
             return `
               <article class="task-queue-item ${getTaskUrgencyTone(urgency)}">
                 <div>
                   <a class="link registry-object-link" href="#/app/tasks/${escapeHtml(task.id)}">${escapeHtml(task.id)}</a>
                   <strong>${escapeHtml(task.type)}</strong>
-                  <small>${escapeHtml(task.client)} · ${escapeHtml(collateral?.description || task.collateralId || "Без объекта")}</small>
+                  <small>${escapeHtml(getTaskClientSummary(task, collaterals))} · ${escapeHtml(collateralText)}</small>
                 </div>
                 <div>
                   ${badge(task.priority)}
@@ -950,12 +1023,21 @@ function renderTasksRegistry() {
   const requestedTab = state.taskRegistryTab || (isManagerView ? "all" : "mine");
   const activeTab = !isManagerView && requestedTab === "all" ? "mine" : requestedTab;
   const filteredRows = state.data.tasks.filter((task) => {
-    const collateral = getCollateral(task.collateralId);
-    const contract = getContract(task.contractId);
+    const collaterals = getTaskCollaterals(task);
+    const contracts = getTaskContracts(task, collaterals);
+    const collateralSearch = collaterals.map((item) => item.id).join(" ");
+    const clientIdSearch = [
+      ...contracts.map((contract) => contract.inn),
+      ...collaterals.map((collateral) => collateral.clientId)
+    ].join(" ");
+    const clientNameSearch = [
+      ...contracts.map((contract) => contract.clientName),
+      ...collaterals.map((collateral) => collateral.clientName)
+    ].join(" ");
     return matches(task.id, filters.number)
-      && matches(contract?.inn || collateral?.clientId, filters.clientId)
-      && matches(task.client || contract?.clientName || collateral?.clientName, filters.clientName)
-      && matches(task.collateralId, filters.collateralId)
+      && matches(clientIdSearch, filters.clientId)
+      && matches(clientNameSearch, filters.clientName)
+      && matches(collateralSearch || task.collateralId, filters.collateralId)
       && matches(task.type, filters.type)
       && matches(task.status, filters.status)
       && matches(task.assignee, filters.assignee);
@@ -998,12 +1080,12 @@ function renderTasksRegistry() {
       </section>
       <section class="panel task-filter-panel">
         <div class="panel-title">
-          <div><h2>Фильтры реестра</h2><p class="hint">Поиск по задаче, клиенту, объекту и исполнителю</p></div>
+        <div><h2>Фильтры реестра</h2><p class="hint">Поиск по задаче, заемщику, залогодателю, объекту и исполнителю</p></div>
         </div>
         <div class="filter-grid registry-filter-grid">
           ${filterInput("tasks", "number", "Номер задачи")}
-          ${filterInput("tasks", "clientId", "ИНН клиента")}
-          ${filterInput("tasks", "clientName", "Наименование/ФИО клиента")}
+          ${filterInput("tasks", "clientId", "ИНН клиента по договору/залогодателя")}
+          ${filterInput("tasks", "clientName", "Клиент по договору/залогодатель")}
           ${filterInput("tasks", "collateralId", "Идентификатор залога")}
           ${filterSelect("tasks", "type", "Тип задачи", taskTypeOptions)}
           ${filterSelect("tasks", "status", "Статус", ["", "Назначена", "В работе", "На согласовании", "Отложена", "На доработке", "Завершена"])}
@@ -1015,14 +1097,18 @@ function renderTasksRegistry() {
         <div class="panel-title"><h2>Задачи</h2><span class="panel-note">${rows.length} из ${baseRows.length}</span></div>
         ${rows.length ? `
           <table class="task-table-modern">
-            <thead><tr><th>Задача</th><th>Клиент и залог</th><th>Тип задачи</th><th>Исполнитель</th><th>SLA</th><th>Статус</th><th>Приоритет</th></tr></thead>
+            <thead><tr><th>Задача</th><th>Клиент по договору/залогодатель и залог</th><th>Тип задачи</th><th>Исполнитель</th><th>SLA</th><th>Статус</th><th>Приоритет</th></tr></thead>
             <tbody>${rows.map((task) => {
-              const collateral = getCollateral(task.collateralId);
+              const collaterals = getTaskCollaterals(task);
+              const collateral = collaterals[0] || getCollateral(task.collateralId);
+              const collateralText = collaterals.length > 1
+                ? `${collaterals.length} залогов: ${collaterals.slice(0, 3).map((item) => item.id).join(", ")}${collaterals.length > 3 ? " ..." : ""}`
+                : `${collateral?.id || task.collateralId || "-"} · ${collateral?.description || "Объект не найден"}`;
               const urgency = getTaskUrgency(task);
               return `
                 <tr>
                   <td><a class="link registry-object-link" href="#/app/tasks/${escapeHtml(task.id)}">${escapeHtml(task.id)}</a><br><small>${escapeHtml(task.createdAt)} · ${escapeHtml(task.source)}</small></td>
-                  <td><strong>${escapeHtml(task.client)}</strong><br><small>${escapeHtml(task.collateralId || "-")} · ${escapeHtml(collateral?.description || "Объект не найден")}</small></td>
+                  <td><strong>${escapeHtml(getTaskClientSummary(task, collaterals))}</strong><br><small>${escapeHtml(collateralText)}</small></td>
                   <td>${escapeHtml(task.type)}</td>
                   <td>${escapeHtml(task.assignee)}</td>
                   <td><span class="task-urgency ${getTaskUrgencyTone(urgency)}"><i></i>${escapeHtml(urgency)}</span><br><small>${escapeHtml(task.dueDate)}</small></td>
@@ -1111,8 +1197,8 @@ function renderContractsRegistry() {
     </section>
     <section class="panel">
       <div class="filter-grid registry-filter-grid">
-        ${filterInput("contracts", "clientId", "ИНН клиента")}
-        ${filterInput("contracts", "clientName", "Наименование/ФИО клиента")}
+        ${filterInput("contracts", "clientId", "ИНН клиента по договору")}
+        ${filterInput("contracts", "clientName", "Клиент по договору")}
         ${filterInput("contracts", "gsz", "ГСЗ")}
         ${filterInput("contracts", "number", "Номер договора")}
         ${filterDateRange("contracts", "periodFrom", "periodTo", "Период заключения договора")}
@@ -1124,11 +1210,11 @@ function renderContractsRegistry() {
     <section class="panel table-panel" data-registry-table="contracts" tabindex="-1">
       <div class="panel-title"><h2>Договоры</h2><span class="panel-note">${rows.length} записей</span></div>
       <table class="contracts-table">
-        <thead><tr><th>Договор</th><th>Клиент</th><th>ГСЗ</th><th>Продукт</th><th>Текущий остаток долга</th><th>Рыночная стоимость</th><th>Аллоцированная стоимость</th><th>Совокупный LTV</th><th>Статус покрытия</th><th>Категория качества</th><th>Размер резерва</th><th>Залоги</th></tr></thead>
+        <thead><tr><th>Договор</th><th>Клиент по договору</th><th>ГСЗ</th><th>Продукт</th><th>Текущий остаток долга</th><th>Рыночная стоимость</th><th>Аллоцированная стоимость</th><th>Совокупный LTV</th><th>Статус покрытия</th><th>Категория качества</th><th>Размер резерва</th><th>Залоги</th></tr></thead>
         <tbody>${rows.map((contract) => `
           <tr>
             <td><a class="link registry-object-link" href="#/app/contracts/${escapeHtml(contract.id)}">${escapeHtml(contract.number)}</a><br><small>${escapeHtml(contract.startDate)} - ${escapeHtml(contract.endDate)}</small><br>${badge(contract.status)}</td>
-            <td>${escapeHtml(contract.clientName)}<br><small>${escapeHtml(contract.inn)}</small></td>
+            <td>${escapeHtml(contract.clientName)}<br><small>${escapeHtml(getContractPartyRole(contract))} · ${escapeHtml(contract.inn)}</small></td>
             <td>${escapeHtml(contract.gsz)}</td>
             <td>${escapeHtml(contract.product)}</td>
             <td>${renderContractDebtCell(contract)}</td>
@@ -1327,8 +1413,8 @@ function renderCollateralsRegistry() {
     </section>
     <section class="panel">
       <div class="filter-grid registry-filter-grid">
-        ${filterInput("collaterals", "clientId", "ИНН клиента")}
-        ${filterInput("collaterals", "clientName", "Наименование/ФИО клиента")}
+        ${filterInput("collaterals", "clientId", "ИНН залогодателя")}
+        ${filterInput("collaterals", "clientName", "Залогодатель")}
         ${filterInput("collaterals", "gsz", "ГСЗ")}
         ${filterInput("collaterals", "number", "Номер договора")}
         ${filterInput("collaterals", "collateralId", "Идентификатор залога")}
@@ -1340,7 +1426,7 @@ function renderCollateralsRegistry() {
     <section class="panel table-panel" data-registry-table="collaterals" tabindex="-1">
       <div class="panel-title"><h2>Залоги</h2><span class="panel-note">${rows.length} объектов</span></div>
       <table>
-        <thead><tr><th>ID</th><th>Тип</th><th>Описание</th><th>Клиент</th><th>ГСЗ</th><th>Договоры</th><th>Рыночная</th><th>Залоговая</th><th>Оценка</th><th>Страхование</th><th>Риск</th></tr></thead>
+        <thead><tr><th>ID</th><th>Тип</th><th>Описание</th><th>Залогодатель</th><th>ГСЗ</th><th>Договоры</th><th>Рыночная</th><th>Залоговая</th><th>Оценка</th><th>Страхование</th><th>Риск</th></tr></thead>
         <tbody>${rows.map((item) => `
           <tr>
             <td><a class="link registry-object-link" href="#/app/collaterals/${escapeHtml(item.id)}">${escapeHtml(item.id)}</a>${item.crossPledge ? `<br>${badge("Кросс-залог", "warn")}` : ""}</td>
@@ -1353,7 +1439,7 @@ function renderCollateralsRegistry() {
             <td>${formatMoney(item.pledgeValue)}</td>
             <td>${badge(item.appraisalStatus)}<br><small>${escapeHtml(item.appraisalDue)}</small></td>
             <td>${badge(item.insuranceStatus)}<br><small>${escapeHtml(item.insuranceDue)}</small></td>
-            <td>${badge(item.riskState, riskTone(item))}</td>
+            <td>${badge(getCollateralRiskState(item), riskTone(item))}</td>
           </tr>
         `).join("")}</tbody>
       </table>
@@ -1531,8 +1617,8 @@ function renderInsurancePoliciesRegistry() {
     <section class="panel">
       <div class="filter-grid registry-filter-grid">
         ${filterInput("insurances", "policy", "Номер полиса")}
-        ${filterInput("insurances", "clientId", "ИНН клиента")}
-        ${filterInput("insurances", "clientName", "Наименование/ФИО клиента")}
+        ${filterInput("insurances", "clientId", "ИНН страхователя")}
+        ${filterInput("insurances", "clientName", "Страхователь")}
         ${filterInput("insurances", "collateralId", "Идентификатор залога")}
         ${filterInput("insurances", "company", "Страховая компания")}
         ${filterSelect("insurances", "status", "Статус полиса", statusOptions)}
@@ -1542,7 +1628,7 @@ function renderInsurancePoliciesRegistry() {
     <section class="panel table-panel" data-registry-table="insurances" tabindex="-1">
       <div class="panel-title"><h2>Страховые полисы</h2><span class="panel-note">${baseRows.length} строк</span></div>
       <table>
-        <thead><tr><th>Полис</th><th>Объект залога</th><th>Клиент</th><th>Договор</th><th>Компания</th><th>Срок</th><th>Сумма</th><th>Премия</th><th>Статус</th><th>Источник</th></tr></thead>
+        <thead><tr><th>Полис</th><th>Объект залога</th><th>Страхователь</th><th>Договор</th><th>Компания</th><th>Срок</th><th>Сумма</th><th>Премия</th><th>Статус</th><th>Источник</th></tr></thead>
         <tbody>${baseRows.map((row) => `
           <tr>
             <td><a class="link registry-object-link" href="#/app/collaterals/${escapeHtml(row.collateral.id)}?tab=insurance">${escapeHtml(row.id)}</a></td>
@@ -1826,7 +1912,7 @@ function renderTaskCard(taskId) {
   if (!task) return renderNotFound("Задача не найдена", "/app/tasks");
   const collaterals = getTaskCollaterals(task);
   const collateral = getTaskActiveCollateral(task, collaterals);
-  const contract = getContract(task.contractId);
+  const activeContracts = getTaskActiveContracts(task, collateral);
   const role = getRole();
   const taskPageClass = [
     "task-page",
@@ -1838,10 +1924,10 @@ function renderTaskCard(taskId) {
     <div class="${taskPageClass}">
       ${renderPageHeader(
         `${task.id} - ${task.type}`,
-        `${task.title}. Источник: ${task.source}. SLA: ${task.sla}.`,
+        "",
         renderTaskHeaderActions(task, role)
       )}
-      ${renderTaskMainInfo(task)}
+      ${renderTaskMainInfo(task, collaterals)}
       <section class="task-detail-layout">
         <div class="task-detail-main">
           ${renderTaskCollateralContext(task, collaterals, collateral)}
@@ -1849,7 +1935,7 @@ function renderTaskCard(taskId) {
           ${renderTaskExpertConclusion(task, collateral)}
         </div>
         <aside class="task-detail-sidebar">
-          ${renderTaskClientContractInfo(task, contract)}
+          ${renderTaskClientContractInfo(task, collateral, activeContracts, collaterals)}
           ${renderTaskDocumentsPanel(task, collaterals, collateral)}
           ${renderTaskRoute(task, role)}
           ${renderTaskHistory(task)}
@@ -1859,14 +1945,12 @@ function renderTaskCard(taskId) {
   `;
 }
 
-function renderTaskMainInfo(task) {
+function renderTaskMainInfo(task, collaterals = getTaskCollaterals(task)) {
   return `
     <section class="panel task-main-info-panel">
       <div class="panel-title">
         <div>
-          <span class="eyebrow">Общий компонент задачи</span>
           <h2>Основная информация по задаче</h2>
-          <p class="hint">${escapeHtml(task.title)}. Источник: ${escapeHtml(task.source)}. SLA: ${escapeHtml(task.sla)}.</p>
         </div>
         <div class="status-stack">${badge(task.status)}${badge(task.priority)}</div>
       </div>
@@ -1876,27 +1960,56 @@ function renderTaskMainInfo(task) {
         <div><span>Плановый срок</span><strong>${escapeHtml(task.dueDate)}</strong></div>
         <div><span>Норматив</span><strong>${escapeHtml(task.normativeTerm || "5 рабочих дней")}</strong></div>
         <div><span>Исполнитель</span><strong>${escapeHtml(task.assignee)}</strong></div>
-        <div><span>Клиент</span><strong>${escapeHtml(task.client)}</strong></div>
+        <div><span>Инициатор</span><strong>${escapeHtml(getTaskInitiator(task))}</strong></div>
       </div>
-      <p class="task-main-result">${escapeHtml(task.result)}</p>
     </section>
   `;
 }
 
-function renderTaskClientContractInfo(task, contract) {
+function renderTaskClientContractInfo(task, activeCollateral, activeContracts = [], taskCollaterals = []) {
+  const primaryContract = activeContracts[0] || getTaskActiveContract(task, activeCollateral);
+  const contractClientNames = uniqueItems(activeContracts.map((contract) => contract.clientName));
+  const contractRoles = uniqueItems(activeContracts.map(getContractPartyRole));
+  const contractNumbers = uniqueItems(activeContracts.map((contract) => contract.number));
+  const multiObjectHint = taskCollaterals.length > 1
+    ? `<p class="hint">Данные обновляются при выборе строки в блоке "Информация по объектам залога".</p>`
+    : "";
+  const contractsTable = activeContracts.length > 1 ? `
+    <div class="task-linked-contracts">
+      <h3>Договоры активного залога</h3>
+      <table>
+        <thead><tr><th>Договор</th><th>Клиент по договору</th><th>Роль</th><th>LTV</th><th>Статус</th></tr></thead>
+        <tbody>${activeContracts.map((contract) => `
+          <tr>
+            <td><button class="link" data-route="/app/contracts/${escapeHtml(contract.id)}">${escapeHtml(contract.number)}</button></td>
+            <td>${escapeHtml(contract.clientName)}</td>
+            <td>${escapeHtml(getContractPartyRole(contract))}</td>
+            <td>${escapeHtml(`${contract.ltv || 0}%`)}</td>
+            <td>${badge(contract.status)}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table>
+    </div>
+  ` : "";
   return `
     <section class="panel task-client-contract-panel">
       <h2>Информация о клиенте и договоре</h2>
+      ${multiObjectHint}
       ${renderInfoGrid({
-        "Клиент": task.client,
-        "ИНН": contract?.inn,
-        "ГСЗ": contract?.gsz,
-        "Договор": contract?.number,
-        "Продукт": contract?.product,
-        "Остаток долга": formatMoney(contract?.debt || 0, contract?.currency),
-        "Категория качества": contract?.loanQuality,
-        "LTV": `${contract?.ltv || 0}%`
+        "Активный залог": activeCollateral?.id,
+        "Клиент по договору": summarizeNames(contractClientNames),
+        "Роль по договору": summarizeNames(contractRoles),
+        "ИНН клиента по договору": primaryContract?.inn,
+        "Залогодатель": activeCollateral?.clientName,
+        "ИНН залогодателя": activeCollateral?.clientId,
+        "ГСЗ": primaryContract?.gsz || activeCollateral?.gsz,
+        "Договор": contractNumbers.length > 1 ? `${contractNumbers.length} договора: ${contractNumbers.join(", ")}` : primaryContract?.number,
+        "Продукт": primaryContract?.product,
+        "Остаток долга": formatMoney(primaryContract?.debt || 0, primaryContract?.currency),
+        "Категория качества": primaryContract?.loanQuality,
+        "LTV": `${primaryContract?.ltv || 0}%`
       })}
+      ${contractsTable}
     </section>
   `;
 }
@@ -1924,7 +2037,7 @@ function renderTaskCollateralDescription(task, collateral) {
         "Категория / подтип": category,
         "Описание": collateral.description,
         "Адрес / местонахождение": collateral.address,
-        "Залогодатель / клиент": collateral.clientName,
+        "Залогодатель": collateral.clientName,
         "ИНН": collateral.clientId,
         "ГСЗ": collateral.gsz,
         "Договор": contract?.number || task.contractId,
@@ -1932,7 +2045,7 @@ function renderTaskCollateralDescription(task, collateral) {
         "Залоговая стоимость": formatMoney(collateral.pledgeValue || 0),
         "Оценка": collateral.appraisalStatus,
         "Страхование": collateral.insuranceStatus,
-        "Состояние риска": collateral.riskState,
+        "Состояние риска": getCollateralRiskState(collateral),
         "Источник данных": collateral.source
       })}
       <div class="inline-actions">
@@ -1953,7 +2066,7 @@ function renderTaskCollateralObjectsInfo(task, collaterals, activeCollateral) {
       </div>
       <div class="table-wrap compact-table task-collateral-table-wrap ${scrollClass}">
         <table>
-          <thead><tr><th>ID</th><th>Тип</th><th>Объект</th><th>Адрес</th><th>Залогодатель / клиент</th><th>Договор</th><th>Рыночная</th><th>Залоговая</th></tr></thead>
+          <thead><tr><th>ID</th><th>Тип</th><th>Объект</th><th>Адрес</th><th>Залогодатель</th><th>Договор</th><th>Рыночная</th><th>Залоговая</th></tr></thead>
           <tbody>${collaterals.map((item) => {
             const contract = getContract(item.contractIds?.[0] || task.contractId);
             const active = item.id === activeCollateral?.id;
@@ -1965,8 +2078,8 @@ function renderTaskCollateralObjectsInfo(task, collaterals, activeCollateral) {
                 <td><span class="task-collateral-cell is-address">${escapeHtml(item.address)}</span></td>
                 <td><span class="task-collateral-cell is-client">${escapeHtml(item.clientName)}</span></td>
                 <td><span class="task-collateral-cell">${escapeHtml(contract?.number || task.contractId || "-")}</span></td>
-                <td>${formatMoney(item.marketValue || 0)}</td>
-                <td>${formatMoney(item.pledgeValue || 0)}</td>
+                <td>${formatShortMoney(item.marketValue || 0)}</td>
+                <td>${formatShortMoney(item.pledgeValue || 0)}</td>
               </tr>
             `;
           }).join("")}</tbody>
@@ -2406,7 +2519,7 @@ function getInspectionFactorGroups(collateral) {
           { code: "need-check", label: "Требуется уточнение правоустанавливающего документа", score: 55 },
           { code: "not-confirmed", label: "Право собственности не подтверждено", score: 0 }
         ] },
-	        { code: "REALTY-RIGHTS-BANS", name: "Аресты и запреты", defaultValue: collateral?.riskState === "Критическое" ? "critical" : "clean", values: [
+	        { code: "REALTY-RIGHTS-BANS", name: "Аресты и запреты", defaultValue: getCollateralRiskState(collateral) === "Критическое" ? "critical" : "clean", values: [
 	          { code: "clean", label: "Аресты и запреты не выявлены", score: 100 },
 	          { code: "attention", label: "Есть внешний сигнал, требуется проверка", score: 50 },
 	          { code: "critical", label: "Выявлены ограничения, влияющие на залог", score: 0 }
@@ -2682,7 +2795,11 @@ function getGeneratedExpertConclusionText(task, collateral) {
 }
 
 function buildTaskExpertConclusionContent(task, collateral, collaterals, template, generatedAt) {
-  const contract = getContract(task.contractId);
+  const activeContracts = getTaskActiveContracts(task, collateral);
+  const contract = activeContracts[0] || getContract(task.contractId);
+  const contractText = activeContracts.length > 1
+    ? activeContracts.map((item) => item.number).join(", ")
+    : contract?.number || task.contractId || "-";
   const defaults = getTaskExpertDefaults(task, collateral);
   const objectList = collaterals.length
     ? collaterals.map((item) => `${item.id} - ${item.type} - ${item.description}`).join("; ")
@@ -2697,9 +2814,13 @@ function buildTaskExpertConclusionContent(task, collateral, collaterals, templat
     `Наименование задачи: ${task.title}`,
     `Статус задачи: ${task.status}`,
     `Исполнитель: ${task.assignee || "-"}`,
-    `Клиент: ${task.client || "-"}`,
-    `Договор: ${contract?.number || task.contractId || "-"}`,
-    `ИНН клиента: ${contract?.inn || collateral?.clientId || "-"}`,
+    `Инициатор: ${getTaskInitiator(task)}`,
+    `Клиент по договору: ${summarizeNames(activeContracts.map((item) => item.clientName))}`,
+    `Роль по договору: ${summarizeNames(activeContracts.map(getContractPartyRole))}`,
+    `ИНН клиента по договору: ${contract?.inn || "-"}`,
+    `Залогодатель: ${collateral?.clientName || "-"}`,
+    `ИНН залогодателя: ${collateral?.clientId || "-"}`,
+    `Договор: ${contractText}`,
     `Активный объект залога: ${collateral ? `${collateral.id} - ${collateral.description}` : "-"}`,
     `Тип активного объекта: ${collateral?.type || "-"}`,
     `Рыночная стоимость: ${collateral ? formatMoney(collateral.marketValue || 0) : "-"}`,
@@ -2787,13 +2908,135 @@ function renderTaskHistory(task) {
   `;
 }
 
+function getCollateralRiskSignals(collateral) {
+  const insuranceDays = daysUntil(collateral?.insuranceDue || collateral?.insurance?.to);
+  const appraisalDays = daysUntil(collateral?.appraisalDue);
+  const evaluations = collateral ? getSortedEvaluations(collateral) : [];
+  const latestEvaluation = evaluations[evaluations.length - 1];
+  const previousEvaluation = evaluations[evaluations.length - 2];
+  const marketDelta = latestEvaluation && previousEvaluation ? getValueDelta(latestEvaluation.market, previousEvaluation.market) : 0;
+  const contracts = (collateral?.contractIds || []).map(getContract).filter(Boolean);
+  const maxLtv = contracts.reduce((max, contract) => Math.max(max, Number(contract.ltv || 0)), 0);
+  const external = collateral?.externalData || {};
+  const hasCourtRestriction = [external["Статус взыскания"], external["Ограничения"], external["Судебный риск"]]
+    .some((value) => isRiskText(value));
+  const arrestText = external["Аресты"] || external["Запреты"] || "";
+  const hasArrest = isRiskText(arrestText);
+  return [
+    {
+      name: "Истечение страховки",
+      level: getDueRiskLevel(collateral?.insuranceStatus, insuranceDays, { criticalStatuses: ["Не оплачена", "Просрочена"], warnStatuses: ["Истекает"] }),
+      source: buildDueRiskSource(collateral?.insuranceStatus, insuranceDays, collateral?.insuranceDue || collateral?.insurance?.to)
+    },
+    {
+      name: "Окончание срока оценки",
+      level: getDueRiskLevel(collateral?.appraisalStatus, appraisalDays, { criticalStatuses: ["Просрочена"], warnStatuses: ["Истекает"] }),
+      source: buildDueRiskSource(collateral?.appraisalStatus, appraisalDays, collateral?.appraisalDue)
+    },
+    {
+      name: "Падение стоимости",
+      level: marketDelta <= -15 ? "critical" : marketDelta <= -7 ? "warn" : "ok",
+      source: latestEvaluation && previousEvaluation ? `Динамика оценки ${formatPercentValue(marketDelta)}` : "Недостаточно истории оценки"
+    },
+    {
+      name: "Ухудшение LTV",
+      level: maxLtv > 100 ? "critical" : maxLtv > 80 ? "warn" : "ok",
+      source: contracts.length ? `Максимальный LTV ${maxLtv}%` : "Нет связанного договора"
+    },
+    {
+      name: "Статус имущества",
+      level: collateral?.status === "В залоге" && !isRiskText(collateral?.fields?.["Признак изменения"]) ? "ok" : "warn",
+      source: collateral?.status || collateral?.fields?.["Состояние"] || "Статус не указан"
+    },
+    {
+      name: "Судебные ограничения",
+      level: hasCourtRestriction ? "critical" : "ok",
+      source: hasCourtRestriction ? "Есть ограничение во внешних данных" : "Проверка без замечаний"
+    },
+    {
+      name: "Двойной залог",
+      level: collateral?.crossPledge ? "warn" : "ok",
+      source: collateral?.crossPledge ? `Связан с ${collateral?.contractIds?.length || 0} договорами` : "Объект привязан к одному договору"
+    },
+    {
+      name: "Арест имущества",
+      level: hasArrest ? "critical" : "ok",
+      source: arrestText || "Аресты и запреты не выявлены"
+    }
+  ];
+}
+
+const collateralRiskSignalWeights = {
+  "Истечение страховки": 15,
+  "Окончание срока оценки": 15,
+  "Падение стоимости": 15,
+  "Ухудшение LTV": 20,
+  "Статус имущества": 10,
+  "Судебные ограничения": 10,
+  "Двойной залог": 5,
+  "Арест имущества": 10
+};
+
+function getRiskSignalLevelRatio(level) {
+  if (level === "critical") return 1;
+  if (level === "warn") return 0.5;
+  return 0;
+}
+
+function getCollateralRiskScore(collateral) {
+  const score = getCollateralRiskSignals(collateral).reduce((sum, signal) => {
+    const weight = collateralRiskSignalWeights[signal.name] || 0;
+    return sum + weight * getRiskSignalLevelRatio(signal.level);
+  }, 0);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getCollateralRiskState(collateral) {
+  const score = getCollateralRiskScore(collateral);
+  if (score >= 75) return "Критическое";
+  if (score >= 45) return "Требует внимания";
+  if (score > 0) return "Удовлетворительное";
+  return "Хорошее";
+}
+
+function getDueRiskLevel(status, days, options = {}) {
+  const criticalStatuses = options.criticalStatuses || [];
+  const warnStatuses = options.warnStatuses || [];
+  if (criticalStatuses.includes(status)) return "critical";
+  if (warnStatuses.includes(status)) return "warn";
+  if (days !== null && days < 0) return "critical";
+  if (days !== null && days <= 30) return "warn";
+  return "ok";
+}
+
+function buildDueRiskSource(status, days, dueDate) {
+  if (!dueDate) return status || "Срок не указан";
+  if (days === null) return `${status || "Статус"}, дата ${dueDate}`;
+  if (days < 0) return `${status || "Статус"}, просрочено на ${Math.abs(days)} дн.`;
+  if (days <= 30) return `${status || "Статус"}, осталось ${days} дн.`;
+  return `${status || "Статус"}, срок до ${dueDate}`;
+}
+
+function isRiskText(value) {
+  const text = String(value || "").toLowerCase();
+  if (!text || text === "нет" || text.includes("не выяв") || text.includes("без замеч")) return false;
+  return text.includes("есть") || text.includes("арест") || text.includes("запрет") || text.includes("иск") || text.includes("суд") || text.includes("огранич") || text.includes("риск");
+}
+
+function formatPercentValue(value) {
+  const rounded = Math.round(Number(value || 0) * 10) / 10;
+  return `${rounded > 0 ? "+" : ""}${String(rounded).replace(".", ",")}%`;
+}
+
 function renderRiskPanel(collateral) {
-  return `<div class="risk-panel">${(collateral?.risks || []).map((risk) => `<div class="risk-item ${risk.level === "critical" ? "critical" : risk.level === "warn" ? "warn" : "ok"}"><span>${escapeHtml(risk.name)}</span><small>${escapeHtml(risk.source)}</small><strong>${escapeHtml(risk.level === "critical" ? "Критично" : risk.level === "warn" ? "Внимание" : "Норма")}</strong></div>`).join("")}</div>`;
+  return `<div class="risk-panel">${getCollateralRiskSignals(collateral).map((risk) => `<div class="risk-item ${risk.level === "critical" ? "critical" : risk.level === "warn" ? "warn" : "ok"}"><span>${escapeHtml(risk.name)}</span><small>${escapeHtml(risk.source)}</small><strong>${escapeHtml(risk.level === "critical" ? "Критично" : risk.level === "warn" ? "Внимание" : "Норма")}</strong></div>`).join("")}</div>`;
 }
 
 function riskTone(collateral) {
-  if (collateral?.riskState === "Критическое" || collateral?.riskScore >= 75) return "danger";
-  if (collateral?.riskState === "Требует внимания" || collateral?.riskScore >= 45) return "warn";
+  const score = getCollateralRiskScore(collateral);
+  const state = getCollateralRiskState(collateral);
+  if (state === "Критическое" || score >= 75) return "danger";
+  if (state === "Требует внимания" || score >= 45) return "warn";
   return "ok";
 }
 
@@ -2960,7 +3203,6 @@ function renderRevaluationTaskBlock(task, collateral) {
       ${renderValuationInspectionBlock(task, collateral)}
       ${renderIndependentValuationBlock(collateral)}
       ${renderTaskRiskAssessment(task, collateral)}
-      ${renderValuationCostsBlock(collateral)}
       <section class="panel market-analysis-panel">
         <div class="panel-title">
           <div><h2>Анализ рынка аналогичных объектов в регионе</h2><p class="hint">Один столбец таблицы соответствует одному сопоставимому объекту. Характеристики и корректировки доступны для ручной правки.</p></div>
@@ -2973,6 +3215,7 @@ function renderRevaluationTaskBlock(task, collateral) {
         </div>
         ${renderMarketAnalogMatrix(task, collateral, matrix)}
       </section>
+      ${renderValuationCostsBlock(collateral)}
       ${renderValuationValueBlock(collateral, valueCalc)}
     </section>
   `;
@@ -2986,7 +3229,8 @@ function renderListRevaluationPanel(task) {
   const rows = getListRevaluationRows(task, collaterals, settings);
   const summary = getListRevaluationSummary(rows, settings);
   const typeDiscounts = getListRevaluationTypeDiscountRows(collaterals, settings);
-  const control = getListRevaluationControlSummary(rows, settings);
+  const excelDocument = getListRevaluationExcelDocument(task);
+  const control = getListRevaluationControlSummary(rows, { ...settings, excelFileAttached: Boolean(excelDocument?.name) });
   const discountMode = isListRevaluationDiscountMode(settings);
   const methodOptions = getListRevaluationMethodOptions();
   return `
@@ -3004,16 +3248,15 @@ function renderListRevaluationPanel(task) {
         <div><span>Изменение портфеля</span><strong class="${summary.totalDelta < 0 ? "negative" : "positive"}">${summary.totalDelta > 0 ? "+" : ""}${summary.totalDelta}%</strong><small>${summary.reviewCount} на ручную проверку</small></div>
       </div>
 
-      <div class="list-revaluation-package-layout">
+      <div class="list-revaluation-workflow-grid">
         <section class="list-revaluation-step-panel list-revaluation-package-panel">
           <div class="list-revaluation-control-head">
             <div><h3>Пакет списочной переоценки</h3><p class="hint">Объекты уже включены в задачу; здесь фиксируются причина, дата и основание массового пересчета.</p></div>
             ${badge(settings.scope, "info")}
           </div>
           <div class="task-form-grid compact list-revaluation-form-grid package-fields">
-            ${renderListRevaluationField(task, "Причина переоценки", "reason", settings.reason, "textarea", [], true, "reason-field")}
-            ${renderListRevaluationField(task, "Дата переоценки", "valuationDate", settings.valuationDate, "date")}
-            ${renderListRevaluationStaticField("Источник / файл", methodConfig.source, methodConfig.sourceHint)}
+            ${renderListRevaluationField(task, "Причина переоценки", "reason", settings.reason, "textarea", [], false, "reason-field")}
+            ${renderListRevaluationField(task, "Дата переоценки", "valuationDate", settings.valuationDate, "date", [], false, "date-field")}
             ${renderListRevaluationField(task, "Комментарий", "comment", settings.comment, "textarea", [], true, "comment-field")}
           </div>
         </section>
@@ -3025,13 +3268,10 @@ function renderListRevaluationPanel(task) {
           <div class="list-revaluation-tool-grid">
             <button class="list-revaluation-tool" data-action="bulk-revaluation-action" data-bulk-action="select-old" data-task="${escapeHtml(task.id)}"><strong>Оценка старше 6 мес.</strong><span>Оставить в расчете залоги с устаревшей оценкой</span></button>
             <button class="list-revaluation-tool" data-action="bulk-revaluation-action" data-bulk-action="select-problem" data-task="${escapeHtml(task.id)}"><strong>Проблемные объекты</strong><span>Сфокусировать расчет на объектах с сигналами контроля</span></button>
-            <button class="list-revaluation-tool" data-action="bulk-revaluation-action" data-bulk-action="upload-excel" data-task="${escapeHtml(task.id)}"><strong>Загрузить Excel</strong><span>Подставить стоимости из проверенного файла</span></button>
             <button class="list-revaluation-tool" data-action="bulk-revaluation-action" data-bulk-action="refresh-market" data-task="${escapeHtml(task.id)}"><strong>Обновить рынок</strong><span>Перезапросить доступные рыночные источники</span></button>
           </div>
         </section>
-      </div>
 
-      <div class="list-revaluation-main-grid">
         <section class="list-revaluation-step-panel list-revaluation-method-panel">
           <div class="list-revaluation-control-head">
             <div><h3>Метод расчета</h3><p class="hint">Метод определяет источник рыночной стоимости и набор параметров расчета.</p></div>
@@ -3049,6 +3289,7 @@ function renderListRevaluationPanel(task) {
             ${renderListRevaluationField(task, "Округление", "roundTo", settings.roundTo, "select", ["Без округления", "1 000", "10 000", "100 000", "1 000 000"])}
             ${renderListRevaluationField(task, "Порог ручной проверки, %", "reviewThreshold", settings.reviewThreshold, "number")}
           </div>
+          ${settings.method === "Загрузка из Excel" ? renderListRevaluationExcelUploadWidget(task) : ""}
           ${renderListRevaluationMethodNote(methodConfig)}
           ${discountMode ? renderListRevaluationTypeDiscounts(task, typeDiscounts) : `<div class="list-revaluation-muted-note">Дисконт по видам имущества скрыт: залоговая стоимость считается процентом к текущей залоговой.</div>`}
         </section>
@@ -3062,18 +3303,6 @@ function renderListRevaluationPanel(task) {
           ${renderListRevaluationReviewList(summary)}
         </section>
       </div>
-
-      <section class="list-revaluation-step-panel list-revaluation-impact-panel">
-        <div class="list-revaluation-control-head">
-          <div><h3>Влияние на договоры</h3><p class="hint">Оценка последствий для покрытия и LTV после выбранной переоценки.</p></div>
-          ${badge(`${control.contractImpactCount} договор(ов)`, "info")}
-        </div>
-        ${renderListRevaluationContractImpact(task, rows)}
-        <div class="list-revaluation-apply-actions">
-          <button class="btn btn-secondary" data-action="bulk-revaluation-action" data-bulk-action="create-individual" data-task="${escapeHtml(task.id)}">Создать задачи оценки по отклонениям</button>
-          <button class="btn btn-primary" data-action="bulk-revaluation-action" data-bulk-action="apply" data-task="${escapeHtml(task.id)}" ${control.canApply ? "" : "disabled"}>Применить переоценку</button>
-        </div>
-      </section>
 
       <div class="list-revaluation-table-head">
         <div><h3>Объекты пакета переоценки</h3><p class="hint">Состав задачи отображается полностью; отключенные строки остаются в пакете, но не участвуют в расчете.</p></div>
@@ -3089,7 +3318,6 @@ function renderListRevaluationPanel(task) {
               <th>Последняя оценка</th>
               <th>Стоимость до</th>
               <th>Стоимость после</th>
-              <th>Основание</th>
               <th>Отклонение</th>
               <th>Контроль</th>
             </tr>
@@ -3106,13 +3334,24 @@ function renderListRevaluationPanel(task) {
                 <label class="inline-edit-field"><span>Залог.</span><input type="number" value="${row.newPledge}" data-list-revaluation-row-value data-task="${escapeHtml(task.id)}" data-collateral="${escapeHtml(row.collateral.id)}" data-field="newPledge"></label>
                 ${discountMode ? `<label class="inline-edit-field"><span>Дисконт</span><div class="percent-input"><input type="number" value="${row.discount}" data-list-revaluation-row-value data-task="${escapeHtml(task.id)}" data-collateral="${escapeHtml(row.collateral.id)}" data-field="discount"><span>%</span></div></label>` : ""}
               </td>
-              <td>${escapeHtml(row.sourceBasis)}<small>${escapeHtml(settings.method)}</small></td>
               <td>${badge(`${row.marketDeltaPercent}%`, Math.abs(row.marketDeltaPercent) >= Number(settings.reviewThreshold || 0) ? "warn" : "ok")}<br><small>${formatMoney(row.newMarket - row.currentMarket)}</small></td>
               <td>${badge(row.status, row.statusTone)}<br><small>${escapeHtml(row.controlReason)}</small></td>
             </tr>
           `).join("")}</tbody>
         </table>
       </div>
+
+      <section class="list-revaluation-step-panel list-revaluation-impact-panel">
+        <div class="list-revaluation-control-head">
+          <div><h3>Влияние на договоры</h3><p class="hint">Оценка последствий для покрытия и LTV после выбранной переоценки.</p></div>
+          ${badge(`${control.contractImpactCount} договор(ов)`, "info")}
+        </div>
+        ${renderListRevaluationContractImpact(task, rows)}
+        <div class="list-revaluation-apply-actions">
+          <button class="btn btn-secondary" data-action="bulk-revaluation-action" data-bulk-action="create-individual" data-task="${escapeHtml(task.id)}">Создать задачи оценки по отклонениям</button>
+          <button class="btn btn-primary" data-action="bulk-revaluation-action" data-bulk-action="apply" data-task="${escapeHtml(task.id)}" ${control.canApply ? "" : "disabled"}>Применить переоценку</button>
+        </div>
+      </section>
     </section>
   `;
 }
@@ -3232,6 +3471,33 @@ function renderListRevaluationMethodNote(config) {
   `;
 }
 
+function getListRevaluationExcelDocument(task) {
+  return (task.documents || []).find((doc) => {
+    const name = String(doc.name || doc.title || "");
+    return doc.category === "listRevaluationExcel"
+      || doc.title === "Файл списочной переоценки"
+      || (doc.target === "task" && /\.(xlsx|xls)$/i.test(name) && /переоценк|реестр|пул/i.test(name));
+  }) || null;
+}
+
+function renderListRevaluationExcelUploadWidget(task) {
+  const doc = getListRevaluationExcelDocument(task);
+  const hasFile = Boolean(doc?.name);
+  return `
+    <div class="list-revaluation-excel-widget ${hasFile ? "has-file" : "empty-file"}">
+      <div>
+        <strong>${hasFile ? escapeHtml(doc.name) : "Excel-файл не прикреплен"}</strong>
+        <span>${hasFile ? "Файл загружен и добавлен в Документы задачи" : "Прикрепите файл со значениями для объектов пакета переоценки"}</span>
+        <small>Колонки: ID залога, рыночная стоимость, залоговая стоимость</small>
+      </div>
+      <label class="btn btn-secondary file-button">
+        ${hasFile ? "Заменить Excel" : "Прикрепить Excel"}
+        <input type="file" accept=".xlsx,.xls" data-list-revaluation-excel-file="${escapeHtml(task.id)}">
+      </label>
+    </div>
+  `;
+}
+
 function getListRevaluationMethodOptions() {
   return ["Индексация по рынку", "Рыночные источники", "Загрузка из Excel"];
 }
@@ -3329,7 +3595,7 @@ function isListRevaluationOldEvaluation(collateral) {
 
 function hasListRevaluationProblemSignal(collateral) {
   const inspectionDays = daysUntil(collateral?.monitoring?.nextInspection);
-  return Number(collateral?.riskScore || 0) >= 45
+  return getCollateralRiskScore(collateral) >= 45
     || collateral?.appraisalStatus !== "Действует"
     || collateral?.insuranceStatus !== "Оплачена"
     || (inspectionDays !== null && inspectionDays <= 7);
@@ -3453,6 +3719,7 @@ function getListRevaluationRows(task, collaterals, settings = getListRevaluation
     const currentMarket = Number(collateral.marketValue || 0);
     const currentPledge = Number(collateral.pledgeValue || 0);
     const override = settings.rowOverrides?.[collateral.id] || {};
+    const manualOverrideText = getListRevaluationManualOverrideText(override);
     const selected = isListRevaluationRowSelected(collateral, settings);
     let discount = getListRevaluationDiscount(collateral, settings);
     if (override.discount !== undefined) discount = Number(override.discount);
@@ -3479,9 +3746,13 @@ function getListRevaluationRows(task, collaterals, settings = getListRevaluation
       status = "Есть сигнал";
       statusTone = "info";
       statusHint = "Проверьте оценку, страховку или мониторинг";
+    } else if (manualOverrideText) {
+      status = "Ручная корректировка";
+      statusTone = "info";
+      statusHint = manualOverrideText;
     }
     const sourceBasis = getListRevaluationRowSourceBasis(collateral, settings, override);
-    const controlReason = getListRevaluationControlReason(collateral, selected, marketDeltaPercent, reviewThreshold, statusHint);
+    const controlReason = getListRevaluationControlReason(collateral, selected, marketDeltaPercent, reviewThreshold, statusHint, manualOverrideText);
     return {
       collateral,
       selected,
@@ -3515,7 +3786,7 @@ function getListRevaluationTypeSources(type) {
   if (type === "Автотранспорт") return "Авто.ру";
   if (type === "Недвижимость") return "Циан / Сервис данных ЕГРН";
   if (type === "Оборудование") return "Авито";
-  if (type === "Товары в обороте") return "Складская сверка / данные учета клиента";
+  if (type === "Товары в обороте") return "Складская сверка / данные учета залогодателя";
   if (type === "Скот") return "Реестр поголовья / данные выездного осмотра";
   return "Ручная оценка";
 }
@@ -3527,15 +3798,27 @@ function getListRevaluationRowSourceBasis(collateral, settings, override = {}) {
   return `Индекс рынка ${Number(settings.marketDelta || 0)}%`;
 }
 
-function getListRevaluationControlReason(collateral, selected, marketDeltaPercent, reviewThreshold, fallback = "") {
+function getListRevaluationManualOverrideText(override = {}) {
+  const fields = [];
+  if (override.newMarket !== undefined) fields.push("рыночная стоимость");
+  if (override.newPledge !== undefined) fields.push("залоговая стоимость");
+  if (override.discount !== undefined) fields.push("дисконт");
+  return fields.length ? `Ручная корректировка: ${fields.join(", ")}` : "";
+}
+
+function getListRevaluationControlReason(collateral, selected, marketDeltaPercent, reviewThreshold, fallback = "", manualOverrideText = "") {
   if (!selected) return "Не участвует в расчете по правилу пакета";
-  if (Math.abs(marketDeltaPercent) >= Number(reviewThreshold || 0)) return `Отклонение ${marketDeltaPercent}% выше порога ${reviewThreshold}%`;
+  if (Math.abs(marketDeltaPercent) >= Number(reviewThreshold || 0)) {
+    return [`Отклонение ${marketDeltaPercent}% выше порога ${reviewThreshold}%`, manualOverrideText].filter(Boolean).join("; ");
+  }
   const reasons = [];
+  if (manualOverrideText) reasons.push(manualOverrideText);
   if (collateral.appraisalStatus !== "Действует") reasons.push(`оценка: ${collateral.appraisalStatus || "не указана"}`);
   if (collateral.insuranceStatus !== "Оплачена") reasons.push(`страхование: ${collateral.insuranceStatus || "не указано"}`);
   const inspectionDays = daysUntil(collateral.monitoring?.nextInspection);
   if (inspectionDays !== null && inspectionDays <= 7) reasons.push(`осмотр через ${inspectionDays} дн.`);
-  if (Number(collateral.riskScore || 0) >= 45) reasons.push(`риск ${collateral.riskScore}`);
+  const riskScore = getCollateralRiskScore(collateral);
+  if (riskScore >= 45) reasons.push(`риск ${riskScore}`);
   return reasons.length ? reasons.join("; ") : (fallback || "Контроль пройден");
 }
 
@@ -3550,7 +3833,10 @@ function getListRevaluationControlSummary(rows, settings = {}) {
   const staleRows = selectedRows.filter((row) => isListRevaluationOldEvaluation(row.collateral));
   const documentGapRows = selectedRows.filter((row) => !hasListRevaluationEvaluationDocument(row.collateral));
   const contractImpactCount = getListRevaluationContractImpacts(null, rows).length;
-  const canApply = selectedRows.length > 0;
+  const excelMissing = settings.method === "Загрузка из Excel" && !settings.excelFileAttached;
+  const canApply = selectedRows.length > 0 && !excelMissing;
+  const applyTone = !canApply ? "danger" : (reviewRows.length ? "warn" : "ok");
+  const applyToneLabel = excelMissing ? "Нужен Excel" : (canApply ? (reviewRows.length ? "Нужна проверка" : "Можно применить") : "Нет объектов");
   return {
     selectedCount: selectedRows.length,
     reviewCount: reviewRows.length,
@@ -3559,10 +3845,11 @@ function getListRevaluationControlSummary(rows, settings = {}) {
     documentGapCount: documentGapRows.length,
     contractImpactCount,
     canApply,
-    applyTone: canApply ? (reviewRows.length ? "warn" : "ok") : "danger",
-    applyToneLabel: canApply ? (reviewRows.length ? "Нужна проверка" : "Можно применить") : "Нет объектов",
+    applyTone,
+    applyToneLabel,
     cards: [
       { label: "В расчете", value: String(selectedRows.length), hint: "объектов участвует в расчете", tone: selectedRows.length ? "ok" : "danger" },
+      ...(settings.method === "Загрузка из Excel" ? [{ label: "Excel-файл", value: settings.excelFileAttached ? "Загружен" : "Не загружен", hint: "обязателен для метода загрузки", tone: settings.excelFileAttached ? "ok" : "danger" }] : []),
       { label: "Ручная проверка", value: String(reviewRows.length), hint: `порог ${settings.reviewThreshold || 0}%`, tone: reviewRows.length ? "warn" : "ok" },
       { label: "Контрольные сигналы", value: String(warningRows.length), hint: "оценка, страхование, мониторинг, риск", tone: warningRows.length ? "warn" : "ok" },
       { label: "Оценка старше 6 мес.", value: String(staleRows.length), hint: "проверить актуальность основания", tone: staleRows.length ? "warn" : "ok" },
@@ -3710,7 +3997,7 @@ function getListRevaluationMarketSourceLabel(collaterals) {
       sources.add("Авито");
     } else if (collateral.type === "Товары в обороте") {
       sources.add("Складская сверка");
-      sources.add("Данные учета клиента");
+      sources.add("Данные учета залогодателя");
     } else if (collateral.type === "Скот") {
       sources.add("Реестр поголовья");
       sources.add("Данные выездного осмотра");
@@ -3741,6 +4028,27 @@ function attachListRevaluationExcel(task, filename) {
   else task.documents.push(documentRow);
 }
 
+function attachListRevaluationExcelFromInput(input) {
+  const task = getTask(input.dataset.listRevaluationExcelFile);
+  if (!task) return;
+  const filename = input.files?.[0]?.name || "";
+  if (!filename) return;
+  if (!/\.(xlsx|xls)$/i.test(filename)) {
+    addToast("Файл не загружен", "Для списочной переоценки нужен файл Excel: .xlsx или .xls.", "warn");
+    return;
+  }
+  const settings = getListRevaluationSettings(task);
+  settings.method = "Загрузка из Excel";
+  settings.scope = "По загруженному Excel";
+  settings.strategy = "Загрузка Excel";
+  settings.source = filename;
+  settings.rowOverrides = {};
+  attachListRevaluationExcel(task, filename);
+  addTaskHistoryEvent(task, { action: "Загружен файл для списочной переоценки", comment: `${filename}; колонки: ID залога, рыночная стоимость, залоговая стоимость.` });
+  persistTaskState();
+  addToast("Excel загружен", "Файл добавлен в Документы задачи, значения подставлены в расчет.", "ok");
+}
+
 function handleListRevaluationAction(actionEl) {
   const task = getTask(actionEl.dataset.task);
   if (!task) return;
@@ -3759,18 +4067,6 @@ function handleListRevaluationAction(actionEl) {
     settings.strategy = "Отбор по сигналам";
     settings.excludedCollateralIds = [];
     addToast("Расчетный контур обновлен", "В расчете оставлены объекты с контрольными сигналами.", "info");
-    return;
-  }
-  if (action === "upload-excel") {
-    settings.scope = "По загруженному Excel";
-    settings.method = "Загрузка из Excel";
-    settings.strategy = "Загрузка Excel";
-    settings.source = "Реестр объектов для списочной переоценки.xlsx";
-    settings.rowOverrides = {};
-    attachListRevaluationExcel(task, settings.source);
-    addTaskHistoryEvent(task, { action: "Загружен файл для списочной переоценки", comment: `${settings.source}; колонки: ID залога, рыночная стоимость, залоговая стоимость.` });
-    persistTaskState();
-    addToast("Файл загружен", "Excel прикреплен в Документы задачи, строки проверены и подставлены в расчет.", "ok");
     return;
   }
   if (action === "refresh-market") {
@@ -3867,8 +4163,9 @@ function renderIndependentValuationBlock(collateral) {
   const evaluation = collateral?.evaluations?.[0] || {};
   const market = Number(evaluation.market || collateral?.marketValue || 0);
   const methods = getValuationMethods(collateral, market);
+  const weightedMarket = getWeightedValuationMarketValue(methods);
   return `
-    <section class="panel task-form-panel">
+    <section class="panel task-form-panel independent-valuation-panel" data-independent-valuation-panel data-collateral="${escapeHtml(collateral?.id || "")}">
       <div class="panel-title">
         <div><h2>Независимая оценка объекта залога</h2></div>
         ${badge(collateral?.appraisalStatus || "Не указано")}
@@ -3885,11 +4182,14 @@ function renderIndependentValuationBlock(collateral) {
         <table class="method-table">
           <thead><tr><th>Метод оценки</th>${methods.map((item) => `<th>${escapeHtml(item.name)}</th>`).join("")}</tr></thead>
           <tbody>
-            <tr><td>Результат оценки</td>${methods.map((item) => `<td><input value="${escapeHtml(formatMoney(item.value))}"></td>`).join("")}</tr>
-            <tr><td>Вес оценки</td>${methods.map((item) => `<td><div class="percent-input"><input value="${escapeHtml(item.weight)}"><span>%</span></div></td>`).join("")}</tr>
+            <tr><td>Результат оценки</td>${methods.map((item, index) => `<td><input value="${escapeHtml(formatMoney(item.value))}" data-valuation-method-value data-method-index="${index}"></td>`).join("")}</tr>
+            <tr><td>Вес оценки</td>${methods.map((item, index) => `<td><div class="percent-input"><input value="${escapeHtml(item.weight)}" data-valuation-method-weight data-method-index="${index}"><span>%</span></div></td>`).join("")}</tr>
           </tbody>
         </table>
       </div>
+      <label class="valuation-weighted-result">Рыночная стоимость объекта
+        <input value="${escapeHtml(formatMoney(weightedMarket))}" data-valuation-weighted-market readonly>
+      </label>
     </section>
   `;
 }
@@ -3901,6 +4201,23 @@ function getValuationMethods(collateral, market) {
     { name: "Сравнительный метод", value: Math.round(market * (isRealty ? 1.21 : 1.15)), weight: isRealty ? 40 : 50 },
     { name: "Затратный метод", value: Math.round(market * (isRealty ? 1.03 : 1.27)), weight: isRealty ? 30 : 20 }
   ];
+}
+
+function getWeightedValuationMarketValue(methods) {
+  return Math.round(methods.reduce((sum, item) => sum + Number(item.value || 0) * Number(item.weight || 0) / 100, 0));
+}
+
+function recalculateIndependentValuationPanel(inputEl) {
+  const panel = inputEl.closest("[data-independent-valuation-panel]");
+  if (!panel) return;
+  const valueInputs = [...panel.querySelectorAll("[data-valuation-method-value]")];
+  const weightInputs = [...panel.querySelectorAll("[data-valuation-method-weight]")];
+  const total = valueInputs.reduce((sum, valueInput, index) => {
+    const weightInput = weightInputs[index];
+    return sum + parseNumericInput(valueInput.value) * parseNumericInput(weightInput?.value || 0) / 100;
+  }, 0);
+  const target = panel.querySelector("[data-valuation-weighted-market]");
+  if (target) target.value = formatMoney(Math.round(total));
 }
 
 function renderTaskRiskAssessment(task, collateral) {
@@ -3921,8 +4238,10 @@ function renderTaskRiskAssessment(task, collateral) {
           <article class="risk-factor-group">
             <div class="inspection-factor-group-head">
               <h3>${escapeHtml(group.title)}</h3>
-              <div><span>Вес группы</span><strong>${group.weight}%</strong></div>
-              <div><span>Балл группы</span><strong>${group.weightedScore}</strong></div>
+              <div class="risk-group-metrics">
+                <div><span>Балл группы</span><strong>${group.weightedScore}</strong></div>
+                <div><span>Вес группы</span><strong>${group.weight}%</strong></div>
+              </div>
             </div>
             <div class="risk-factor-items">
               ${group.items.map((item) => `
@@ -3943,8 +4262,9 @@ function renderTaskRiskAssessment(task, collateral) {
 }
 
 function getTaskRiskFactorGroups(collateral) {
-  const high = collateral?.riskScore >= 70;
-  const medium = collateral?.riskScore >= 35;
+  const riskScore = getCollateralRiskScore(collateral);
+  const high = riskScore >= 70;
+  const medium = riskScore >= 35;
   return [
     { code: "STOP", title: "Стоп-факторы", weight: 60, items: [
       { code: "STOP-ARREST", name: "Аресты, суды и ограничения", weight: 35, defaultValue: high ? "yes" : "no", values: yesNoRiskValues() },
@@ -4081,7 +4401,8 @@ function renderValuationValueBlock(collateral, calc) {
 function getRevaluationValueCalculation(collateral, matrix) {
   const marketValue = matrix.finalMarketValue || collateral?.marketValue || 0;
   const baseDiscount = collateral?.marketValue ? Math.max(10, Math.round((1 - (collateral?.pledgeValue || 0) / collateral.marketValue) * 10000) / 100) : 30;
-  const riskAdd = collateral?.riskScore >= 70 ? 10 : collateral?.riskScore >= 35 ? 5 : 0;
+  const riskScore = getCollateralRiskScore(collateral);
+  const riskAdd = riskScore >= 70 ? 10 : riskScore >= 35 ? 5 : 0;
   const discount = Number((baseDiscount + riskAdd).toFixed(2));
   const pledgeValue = Math.round(marketValue * (1 - discount / 100));
   const realizationYears = collateral?.type === "Недвижимость" ? 4 : 3;
@@ -4095,7 +4416,7 @@ function getRevaluationValueCalculation(collateral, matrix) {
     cor,
     discountedValue,
     comment: "Обеспечение степени ликвидности объекта залога, допущения и ограничения в отношении определенной стоимости объекта залога, иные комментарии.",
-    conclusion: `Ликвидность имущества может быть оценена как ${collateral?.riskScore >= 45 ? "средняя" : "очень высокая"}, ожидаемый срок продажи не превысит ${realizationYears * 12} месяцев.`
+    conclusion: `Ликвидность имущества может быть оценена как ${riskScore >= 45 ? "средняя" : "очень высокая"}, ожидаемый срок продажи не превысит ${realizationYears * 12} месяцев.`
   };
 }
 
@@ -4342,7 +4663,7 @@ function renderMarketMatrixRow(label, columns, getter, mode = "manual", context 
 function parseNumericInput(value) {
   const normalized = String(value ?? "")
     .replace(/\s/g, "")
-    .replace("%", "")
+    .replace(/[^0-9,.-]/g, "")
     .replace(",", ".");
   const number = Number(normalized);
   return Number.isFinite(number) ? number : 0;
@@ -4499,16 +4820,16 @@ function renderContractCard(contractId) {
   if (!contract) return renderNotFound("Договор не найден", "/app/contracts");
   const collaterals = contract.collateralIds.map(getCollateral).filter(Boolean);
   return `
-    ${renderPageHeader(`Договор ${contract.number}`, `${contract.clientName}. Карточка договора доступна только для просмотра.`, `<button class="btn btn-secondary" data-route="/app/contracts">Назад</button><button class="btn btn-secondary" data-route="/app/print/${contract.id}">Печатная форма</button>`)}
+    ${renderPageHeader(`Договор ${contract.number}`, `${contract.clientName}. Карточка договора доступна только для просмотра.`, `<button class="btn btn-secondary" data-route="/app/contracts">Назад</button>`)}
     <section class="object-hero">
       <div><span class="eyebrow">Статус покрытия</span><h2>${badge(contract.coverageStatus)} ${badge(`${contract.ltv}%`, contract.ltv >= 100 ? "danger" : contract.ltv > 70 ? "warn" : "ok")}</h2><p>Категория качества и расчетный резерв получены из АБС ЦФТ и не редактируются в модуле.</p></div>
       <div class="hero-metrics"><div><span>Остаток долга</span><strong>${formatMoney(contract.debt, contract.currency)}</strong></div><div><span>Аллоцированная стоимость</span><strong>${formatMoney(contract.allocatedValue)}</strong></div><div><span>Резерв</span><strong>${formatMoney(contract.reserve)}</strong></div></div>
     </section>
-    <section class="grid-2">
-      <div class="panel"><h2>Общая информация</h2>${renderInfoGrid({ "Номер": contract.number, "Дата": contract.startDate, "Дата окончания": contract.endDate, "Продукт": contract.product, "Валюта": contract.currency, "Лимит": formatMoney(contract.limit, contract.currency), "Статус": contract.status, "Категория качества": contract.loanQuality })}</div>
-      <div class="panel table-panel"><h2>Участники сделки</h2><table><thead><tr><th>Роль</th><th>Наименование/ФИО</th><th>ИНН</th><th>Доля/роль</th><th>Контакт</th></tr></thead><tbody>${contract.participants.map((item) => `<tr><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.idn)}</td><td>${escapeHtml(item.share)}</td><td>${escapeHtml(item.contact)}</td></tr>`).join("")}</tbody></table></div>
+    <section class="grid-2 contract-card-info-grid">
+      <div class="panel contract-general-panel"><h2>Общая информация</h2>${renderInfoGrid({ "Номер": contract.number, "Дата": contract.startDate, "Дата окончания": contract.endDate, "Продукт": contract.product, "Валюта": contract.currency, "Лимит": formatMoney(contract.limit, contract.currency), "Статус": contract.status, "Категория качества": contract.loanQuality })}</div>
+      <div class="panel table-panel contract-participants-panel"><h2>Участники сделки</h2><table><thead><tr><th>Роль</th><th>Наименование/ФИО</th><th>ИНН</th><th>Доля</th><th>Статус</th></tr></thead><tbody>${contract.participants.map((item) => `<tr><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.idn)}</td><td>${escapeHtml(item.share)}</td><td>${escapeHtml(item.contact)}</td></tr>`).join("")}</tbody></table></div>
     </section>
-    <section class="panel table-panel"><h2>Связанные залоги</h2><table><thead><tr><th>ID</th><th>Тип</th><th>Описание</th><th>Рыночная</th><th>Залоговая</th><th>Аллоцированная</th><th>Статус</th><th></th></tr></thead><tbody>${collaterals.map((item) => `<tr><td>${escapeHtml(item.id)}</td><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.description)}</td><td>${formatMoney(item.marketValue)}</td><td>${formatMoney(item.pledgeValue)}</td><td>${formatMoney(item.allocatedValue)}</td><td>${badge(item.status)}</td><td><button class="btn btn-small" data-route="/app/collaterals/${item.id}">Карточка залога</button></td></tr>`).join("")}</tbody></table></section>
+    <section class="panel table-panel"><h2>Связанные залоги</h2><table class="contract-linked-collaterals-table"><thead><tr><th>ID</th><th>Тип</th><th>Описание</th><th>Залогодатель</th><th>Рыночная</th><th>Залоговая</th><th>Аллоцированная</th><th>Статус</th></tr></thead><tbody>${collaterals.map((item) => `<tr><td><a class="link registry-object-link" href="#/app/collaterals/${escapeHtml(item.id)}">${escapeHtml(item.id)}</a></td><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.description)}</td><td>${escapeHtml(item.clientName)}</td><td>${formatMoney(item.marketValue)}</td><td>${formatMoney(item.pledgeValue)}</td><td>${formatMoney(item.allocatedValue)}</td><td>${badge(item.status)}</td></tr>`).join("")}</tbody></table></section>
   `;
 }
 
@@ -4525,7 +4846,7 @@ function renderCollateralCard(collateralId, query = new URLSearchParams()) {
     ${renderPageHeader(`${collateral.id} - ${collateral.type}`, collateral.description, `<button class="btn btn-secondary" data-route="/app/collaterals">Назад</button><button class="btn btn-secondary" data-route="/app/tasks/new?collateral=${collateral.id}">Создать задачу</button><button class="btn btn-primary" data-action="refresh-external" data-collateral="${collateral.id}">Обновить внешние данные</button>`)}
     <section class="object-hero">
       <div><span class="eyebrow">${collateral.clientType === "ФЛ" ? "ФИО / ИНН" : "Наименование / ИНН"}</span><h2>${escapeHtml(collateral.clientName)}</h2><p>${escapeHtml(collateral.clientId)} - ${escapeHtml(collateral.gsz)} - ${escapeHtml(collateral.region)}</p></div>
-      <div class="hero-metrics"><div><span>Рыночная стоимость</span><strong>${formatMoney(collateral.marketValue)}</strong></div><div><span>Залоговая стоимость</span><strong>${formatMoney(collateral.pledgeValue)}</strong></div><div><span>Риск</span><strong>${badge(collateral.riskState, riskTone(collateral))}</strong></div></div>
+      <div class="hero-metrics"><div><span>Рыночная стоимость</span><strong>${formatMoney(collateral.marketValue)}</strong></div><div><span>Залоговая стоимость</span><strong>${formatMoney(collateral.pledgeValue)}</strong></div><div><span>Риск</span><strong>${badge(getCollateralRiskState(collateral), riskTone(collateral))}</strong></div></div>
     </section>
     <div class="tabs wrap">${tabs.map(([id, label]) => `<button class="${state.collateralTab === id ? "active" : ""}" data-action="collateral-tab" data-tab="${id}">${escapeHtml(label)}</button>`).join("")}</div>
     ${renderCollateralTab(collateral)}
@@ -4561,7 +4882,7 @@ function renderCollateralOverview(collateral) {
   const ownershipFields = {
     [collateral.clientType === "ФЛ" ? "ФИО залогодателя" : "Залогодатель / организация"]: collateral.clientName,
     "ИНН": collateral.clientId,
-    "Тип клиента": collateral.clientType,
+    "Тип залогодателя": collateral.clientType,
     "ГСЗ": collateral.gsz,
     "Ответственный": collateral.responsible,
     "Источник загрузки": collateral.source,
@@ -4589,7 +4910,7 @@ function renderCollateralOverview(collateral) {
         <div class="overview-metrics">
           <div><span>Рыночная стоимость</span><strong>${formatMoney(collateral.marketValue)}</strong></div>
           <div><span>Залоговая стоимость</span><strong>${formatMoney(collateral.pledgeValue)}</strong></div>
-          <div><span>Риск</span><strong>${badge(collateral.riskState, riskTone(collateral))}</strong></div>
+          <div><span>Риск</span><strong>${badge(getCollateralRiskState(collateral), riskTone(collateral))}</strong></div>
         </div>
       </div>
       <section class="panel">
@@ -4653,18 +4974,20 @@ function getCollateralCategory(collateral) {
 
 function renderCollateralMonitoring(collateral) {
   return renderMonitoringObjectComponent(collateral, {
-    note: collateral.id
+    note: collateral.id,
+    showMonitoringSettings: true
   });
 }
 
 function renderMonitoringObjectComponent(collateral, options = {}) {
-  const { note = "", showInspectionTable = true, showLatestValuation = false } = options;
+  const { note = "", showInspectionTable = true, showLatestValuation = false, showMonitoringSettings = false } = options;
   const monitoring = collateral.monitoring || {};
   const schedule = monitoring.schedule || [];
   const last = [...schedule].reverse().find((item) => item.status === "Завершен") || schedule[0] || {};
   const previousControl = monitoring.lastInspection || last.date || "";
   return `
     <section class="collateral-inspections-view collateral-tab-view monitoring-object-component">
+      ${showMonitoringSettings ? renderMonitoringSettingsPanel(collateral, note) : ""}
       <section class="panel inspection-card">
         <div class="panel-title">
           <h2>Последний осмотр</h2>
@@ -4678,6 +5001,45 @@ function renderMonitoringObjectComponent(collateral, options = {}) {
   `;
 }
 
+
+function renderMonitoringSettingsPanel(collateral, note = "") {
+  const monitoring = collateral.monitoring || {};
+  const schedule = monitoring.schedule || [];
+  const last = [...schedule].reverse().find((item) => item.status === "Завершен") || schedule[0] || {};
+  const next = schedule.find((item) => item.status === "Запланирован") || {};
+  const currentPeriodicity = monitoring.periodicity || "Ежеквартально";
+  const periodicities = [...new Set(["Ежемесячно", "Ежеквартально", "Раз в два месяца", "Раз в полгода", "Ежегодно", "По событию", currentPeriodicity].filter(Boolean))];
+  const monitoringRequired = monitoring.required || "ДА";
+  const previousControl = monitoring.lastInspection || last.date || "";
+  const nextControl = monitoring.nextInspection || next.date || "";
+  return `
+    <section class="panel monitoring-settings-panel">
+      <div class="panel-title">
+        <div><h2>Настройки мониторинга</h2><p class="hint">Требование мониторинга, периодичность и следующий контроль редактируются. Предыдущий контроль фиксируется по последнему завершенному осмотру.</p></div>
+        ${note ? `<span class="panel-note">${escapeHtml(note)}</span>` : ""}
+        <button class="btn btn-secondary" data-action="save-monitoring" data-collateral="${escapeHtml(collateral.id)}">Сохранить настройки</button>
+      </div>
+      <div class="form-grid monitoring-settings-grid">
+        <label>Требуется мониторинг
+          <select data-monitoring-field="required" data-collateral="${escapeHtml(collateral.id)}">
+            ${["ДА", "НЕТ"].map((item) => `<option value="${escapeHtml(item)}" ${item === monitoringRequired ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Периодичность
+          <select data-monitoring-field="periodicity" data-collateral="${escapeHtml(collateral.id)}">
+            ${periodicities.map((item) => `<option value="${escapeHtml(item)}" ${item === currentPeriodicity ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Предыдущий контроль
+          <input type="date" value="${escapeHtml(previousControl)}" readonly>
+        </label>
+        <label>Следующий контроль
+          <input type="date" value="${escapeHtml(nextControl)}" data-monitoring-field="nextInspection" data-collateral="${escapeHtml(collateral.id)}">
+        </label>
+      </div>
+    </section>
+  `;
+}
 function renderLatestValuationPanel(collateral, note = "") {
   const evaluations = getSortedEvaluations(collateral);
   const latest = evaluations[evaluations.length - 1];
@@ -4882,7 +5244,7 @@ function formatEvaluationDate(dateValue) {
 
 function renderCollateralContracts(collateral) {
   const contracts = (collateral.contractIds || []).map(getContract).filter(Boolean);
-  return `<section class="panel table-panel"><h2>Договоры и обременения</h2><table><thead><tr><th>Договор</th><th>Клиент</th><th>Остаток</th><th>LTV</th><th>Обременение</th><th>Статус</th></tr></thead><tbody>${contracts.map((contract) => `<tr><td><button class="link" data-route="/app/contracts/${contract.id}">${escapeHtml(contract.number)}</button></td><td>${escapeHtml(contract.clientName)}</td><td>${formatMoney(contract.debt, contract.currency)}</td><td>${badge(`${contract.ltv}%`)}</td><td>${escapeHtml(collateral.encumbrances?.[0]?.number || "-")}</td><td>${badge(contract.status)}</td></tr>`).join("")}</tbody></table></section>`;
+  return `<section class="panel table-panel"><h2>Договоры и обременения</h2><table><thead><tr><th>Договор</th><th>Клиент по договору</th><th>Роль по договору</th><th>Остаток</th><th>LTV</th><th>Обременение</th><th>Статус</th></tr></thead><tbody>${contracts.map((contract) => `<tr><td><button class="link" data-route="/app/contracts/${contract.id}">${escapeHtml(contract.number)}</button></td><td>${escapeHtml(contract.clientName)}</td><td>${escapeHtml(getContractPartyRole(contract))}</td><td>${formatMoney(contract.debt, contract.currency)}</td><td>${badge(`${contract.ltv}%`)}</td><td>${escapeHtml(collateral.encumbrances?.[0]?.number || "-")}</td><td>${badge(contract.status)}</td></tr>`).join("")}</tbody></table></section>`;
 }
 
 function renderCollateralPledgors(collateral) {
@@ -4890,7 +5252,10 @@ function renderCollateralPledgors(collateral) {
 }
 
 function renderCollateralRisks(collateral) {
-  const levels = (collateral.risks || []).reduce((acc, risk) => {
+  const signals = getCollateralRiskSignals(collateral);
+  const riskScore = getCollateralRiskScore(collateral);
+  const riskState = getCollateralRiskState(collateral);
+  const levels = signals.reduce((acc, risk) => {
     acc[risk.level] = (acc[risk.level] || 0) + 1;
     return acc;
   }, {});
@@ -4899,24 +5264,24 @@ function renderCollateralRisks(collateral) {
       <div class="tab-summary-card">
         <div>
           <span class="eyebrow">Риск-профиль залога</span>
-          <h2>${escapeHtml(collateral.riskState)}</h2>
+          <h2>${escapeHtml(riskState)}</h2>
           <p>Критичных сигналов: ${levels.critical || 0}, требуют внимания: ${levels.warn || 0}, без замечаний: ${levels.ok || 0}. Контроль строится по данным карточки, страхования, оценки, кросс-залогов и внешних источников.</p>
         </div>
         <div class="risk-score-ring" title="Балл риска">
-          <span>${escapeHtml(collateral.riskScore)}</span>
+          <span>${escapeHtml(riskScore)}</span>
         </div>
       </div>
       <section class="grid-2 tab-feature-grid">
         <div class="panel risk-signals-panel">
           <div class="panel-title">
             <div><h2>Сигналы рисков</h2><p class="hint">Состояние объекта по контрольным правилам и последним проверкам.</p></div>
-            ${badge(collateral.riskState, riskTone(collateral))}
+            ${badge(riskState, riskTone(collateral))}
           </div>
           ${renderRiskPanel(collateral)}
           <div class="score-card">
             <span>Балл риска</span>
-            <p>${escapeHtml(collateral.riskState)}</p>
-            <strong>${escapeHtml(collateral.riskScore)}</strong>
+            <p>${escapeHtml(riskState)}</p>
+            <strong>${escapeHtml(riskScore)}</strong>
           </div>
         </div>
         <div class="panel risk-rules-panel">
@@ -5680,10 +6045,11 @@ function renderReports() {
       ${renderReportTable({
         title: "Договоры и покрытие залогом",
         note: "договоры, долг, залоговая стоимость, LTV",
-        columns: ["Договор", "Клиент", "Долг", "Залоговая стоимость", "LTV", "Покрытие", "Контроль"],
+        columns: ["Договор", "Клиент по договору", "Роль", "Долг", "Залоговая стоимость", "LTV", "Покрытие", "Контроль"],
         rows: contractRows.map(({ contract, linkedCollaterals, contractPledge, ltvTone, control }) => [
           reportCell(`<strong>${escapeHtml(contract.number)}</strong><br><small>${escapeHtml(contract.id)}</small>`),
           contract.clientName,
+          getContractPartyRole(contract),
           formatShortMoney(getContractDebtRub(contract)),
           reportCell(`${formatShortMoney(contractPledge || contract.allocatedValue)}<br><small>${linkedCollaterals.length} объектов</small>`),
           reportCell(badge(`${contract.ltv}%`, ltvTone), "num"),
@@ -5706,14 +6072,14 @@ function renderReports() {
       })}
       ${renderReportTable({
         title: "Детальный отчет по объектам залога",
-        note: "объект, клиент, стоимость, риск, оценка и страхование",
-        columns: ["Объект залога", "Клиент", "Вид / регион", "Стоимость", "Риск", "Оценка", "Страхование"],
+        note: "объект, залогодатель, стоимость, риск, оценка и страхование",
+        columns: ["Объект залога", "Залогодатель", "Вид / регион", "Стоимость", "Риск", "Оценка", "Страхование"],
         rows: detailedCollateralRows.map((collateral) => [
           reportCell(`<strong>${escapeHtml(collateral.id)}</strong><br><small>${escapeHtml(collateral.description)}</small>`),
           collateral.clientName,
           reportCell(`${escapeHtml(collateral.type)}<br><small>${escapeHtml(collateral.region)}</small>`),
           reportCell(`${formatShortMoney(collateral.marketValue)}<br><small>залоговая: ${formatShortMoney(collateral.pledgeValue)}</small>`),
-          reportCell(badge(collateral.riskState, riskTone(collateral))),
+          reportCell(badge(getCollateralRiskState(collateral), riskTone(collateral))),
           reportCell(`${badge(collateral.appraisalStatus)}<br><small>до ${escapeHtml(collateral.appraisalDue)}</small>`),
           reportCell(`${badge(collateral.insuranceStatus)}<br><small>до ${escapeHtml(collateral.insuranceDue)}</small>`)
         ])
@@ -5721,7 +6087,7 @@ function renderReports() {
       ${renderReportTable({
         title: "Страховые полисы",
         note: "полисы, сроки действия, страховая сумма и оплата премии",
-        columns: ["Полис", "Клиент / объект", "Страховая компания", "Страховая сумма", "Срок действия", "Премия", "Контроль"],
+        columns: ["Полис", "Страхователь / объект", "Страховая компания", "Страховая сумма", "Срок действия", "Премия", "Контроль"],
         rows: policyRows.map((row) => {
           const control = matchesInsuranceKpi(row, "unpaid")
             ? "Получить подтверждение оплаты"
@@ -5789,7 +6155,7 @@ function renderReports() {
       ${renderReportTable({
         title: "Обременения и регистрация залога",
         note: "контроль зарегистрированных обременений по объектам и договорам",
-        columns: ["Обременение", "Объект / клиент", "Тип", "Договор", "Сумма", "Выделено / LTV", "Статус"],
+        columns: ["Обременение", "Объект / залогодатель", "Тип", "Договор", "Сумма", "Выделено / LTV", "Статус"],
         rows: encumbranceRows.map(({ collateral, encumbrance }) => [
           reportCell(`<strong>${escapeHtml(encumbrance.number)}</strong><br><small>${escapeHtml(encumbrance.date)}</small>`),
           reportCell(`${escapeHtml(collateral.id)} · ${escapeHtml(collateral.clientName)}<br><small>${escapeHtml(collateral.description)}</small>`),
@@ -5811,7 +6177,7 @@ function renderPrintPreview(id) {
   const title = collateral ? `${collateral.id} - ${collateral.description}` : contract ? `Договор ${contract.number}` : form ? form.name : id;
   const description = form
     ? `Этап: ${form.stage}. Владелец: ${form.owner}. Объем: ${form.pages} страниц, ${form.params} параметров.`
-    : "Форма содержит реквизиты клиента, договора, объекта залога, стоимости, страхования и истории согласования.";
+    : "Форма содержит реквизиты клиента по договору, договора, объекта залога, стоимости, страхования и истории согласования.";
   const backRoute = form ? "/app/reports" : contract ? "/app/contracts" : "/app/tasks";
   return `${renderPageHeader("Печатная форма", "Демонстрационный предпросмотр документа.", `<button class="btn btn-secondary" data-route="${backRoute}">Назад</button><button class="btn btn-primary" data-action="print">Печать</button>`)}<section class="print-preview"><h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></section>`;
 }
@@ -5837,7 +6203,7 @@ function renderMobileShell(title, content, subtitle = "") {
 }
 
 function getMobileInspectionContactDetails(task, collateral) {
-  const organization = collateral?.clientName || task?.client || "Представитель клиента";
+  const organization = collateral?.clientName || task?.client || "Представитель залогодателя";
   const routeContact = task?.clientContact ? `Контакт из маршрута: ${task.clientContact}` : "";
   const detailsByType = {
     "Автотранспорт": {
@@ -6037,6 +6403,7 @@ function renderMobileInspectionSubmitActions(task, collateral, checklist) {
 
 function renderMobileEmployeeTaskCard(task) {
   const collateral = getCollateral(task.collateralId);
+  const collaterals = getTaskCollaterals(task);
   const progress = getMobileInspectionProgress(task, collateral);
   const address = collateral?.address || "Адрес не указан";
   return `
@@ -6050,7 +6417,7 @@ function renderMobileEmployeeTaskCard(task) {
       </div>
       <p>${escapeHtml(collateral?.description || "Объект залога не указан")}</p>
       <div class="mobile-card-grid">
-        <div><span>Клиент</span><strong>${escapeHtml(task.client || collateral?.clientName || "-")}</strong></div>
+        <div><span>Клиент по договору / залогодатель</span><strong>${escapeHtml(getTaskClientSummary(task, collaterals))}</strong></div>
         <div><span>Дата выезда</span><strong>${escapeHtml(task.dueDate || "-")}</strong></div>
         <div class="wide"><span>Адрес</span><strong>${escapeHtml(address)}</strong></div>
       </div>
@@ -6121,12 +6488,12 @@ function renderCollateralRegistryPickerModal() {
       <section class="modal wide">
         <div class="modal-head"><h2>Выбрать из реестра залогов</h2><button class="btn btn-secondary" data-action="close-modal">Закрыть</button></div>
         <div class="task-pool-search">
-          <label>Поиск по ID, клиенту, адресу, ГСЗ или типу<input value="${escapeHtml(search)}" data-modal-collateral-search></label>
+          <label>Поиск по ID, залогодателю, адресу, ГСЗ или типу<input value="${escapeHtml(search)}" data-modal-collateral-search></label>
           <span>${rows.length} объектов найдено</span>
         </div>
         <div class="table-wrap collateral-picker-table">
           <table>
-            <thead><tr><th></th><th>ID</th><th>Тип</th><th>Объект</th><th>Клиент</th><th>ГСЗ</th><th>Залоговая стоимость</th><th>Риск</th></tr></thead>
+            <thead><tr><th></th><th>ID</th><th>Тип</th><th>Объект</th><th>Залогодатель</th><th>ГСЗ</th><th>Залоговая стоимость</th><th>Риск</th></tr></thead>
             <tbody>${rows.map((item) => `
               <tr>
                 <td><input type="checkbox" data-modal-collateral-choice="${escapeHtml(item.id)}" ${selected.has(item.id) ? "checked" : ""}></td>
@@ -6136,7 +6503,7 @@ function renderCollateralRegistryPickerModal() {
                 <td>${escapeHtml(item.clientName)}<br><small>${escapeHtml(item.clientId)}</small></td>
                 <td>${escapeHtml(item.gsz)}</td>
                 <td>${formatMoney(item.pledgeValue || 0)}</td>
-                <td>${badge(item.riskState, riskTone(item))}</td>
+                <td>${badge(getCollateralRiskState(item), riskTone(item))}</td>
               </tr>
             `).join("")}</tbody>
           </table>
@@ -6159,8 +6526,8 @@ function renderNewCollateralModal() {
           <label>Идентификатор объекта залога<input id="newCollateralId" value="${escapeHtml(nextId)}" required></label>
           <label>Тип залога<select id="newCollateralType">${types.map((item) => `<option>${escapeHtml(item)}</option>`).join("")}</select></label>
           <label>Договор<select id="newCollateralContract"><option value="">Не выбран</option>${contracts.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.number)} - ${escapeHtml(item.clientName)}</option>`).join("")}</select></label>
-          <label>Наименование/ФИО клиента<input id="newCollateralClient" value="ООО Нью Пласт"></label>
-          <label>ИНН клиента<input id="newCollateralClientId" value="5259555771"></label>
+          <label>Наименование/ФИО залогодателя<input id="newCollateralClient" value="ООО Нью Пласт"></label>
+          <label>ИНН залогодателя<input id="newCollateralClientId" value="5259555771"></label>
           <label>ГСЗ<input id="newCollateralGsz" value="ГСЗ Нью Пласт"></label>
           <label>Полный адрес / место хранения<input id="newCollateralAddress" value="Московская область, г. Клин, промышленная зона, склад 7"></label>
         </div>
@@ -6328,7 +6695,7 @@ function createTask(payload) {
     collateralId: payload.collateralId,
     collateralIds: payload.collateralIds?.length > 1 ? payload.collateralIds : undefined,
     contractId: contract?.id,
-    client: contract?.clientName || collateral?.clientName || "Клиент не указан",
+    client: contract?.clientName || collateral?.clientName || "Участник не указан",
     assignee: payload.assignee || employees[0],
     status: "Назначена",
     dueDate: payload.dueDate || "2026-06-24",
@@ -6392,7 +6759,10 @@ document.addEventListener("click", (event) => {
   if (action === "task-registry-tab") {
     state.taskRegistryTab = actionEl.dataset.tab || "mine";
   }
-  if (action === "collateral-tab") state.collateralTab = actionEl.dataset.tab;
+  if (action === "collateral-tab") {
+    updateCollateralTabRoute(actionEl.dataset.tab);
+    return;
+  }
   if (action === "select-task-collateral") state.taskActiveCollateral[actionEl.dataset.task] = actionEl.dataset.collateral;
   if (action === "task-defer") deferTask(actionEl.dataset.task);
   if (action === "task-return") returnTaskToPreviousAssignee(actionEl.dataset.task);
@@ -6423,6 +6793,10 @@ document.addEventListener("click", (event) => {
   if (action === "refresh-external-source") addToast("Запрос отправлен", `${actionEl.dataset.source || "Источник"} · ${actionEl.dataset.collateral || ""}`, "ok");
   if (action === "delete-document") deleteDocument(actionEl.dataset);
   if (action === "risk-rule") addToast("Контрольное правило", `${actionEl.dataset.rule}: проверка выполнена по данным карточки залога.`, "info");
+  if (action === "save-monitoring") {
+    document.querySelectorAll(`[data-monitoring-field][data-collateral="${actionEl.dataset.collateral}"]`).forEach(updateCollateralMonitoringField);
+    addToast("Настройки мониторинга сохранены", actionEl.dataset.collateral, "ok");
+  }
   if (action === "open-import-collaterals") state.modal = { type: "import", fileLoaded: false };
   if (action === "open-task-import-collaterals") state.modal = { type: "import", context: "taskCreate", fileLoaded: false };
   if (action === "confirm-import") submitImportCollaterals();
@@ -6443,6 +6817,11 @@ document.addEventListener("input", (event) => {
   const marketAdjustment = event.target.closest("[data-market-adjustment]");
   if (marketAdjustment) {
     updateMarketAdjustment(marketAdjustment);
+    return;
+  }
+  const valuationMethod = event.target.closest("[data-valuation-method-value], [data-valuation-method-weight]");
+  if (valuationMethod) {
+    recalculateIndependentValuationPanel(valuationMethod);
     return;
   }
   const filter = event.target.closest("[data-filter-scope]");
@@ -6498,6 +6877,11 @@ document.addEventListener("change", (event) => {
   }
   if (event.target.matches("[data-list-revaluation-row]")) {
     toggleListRevaluationRow(event.target);
+    render();
+    return;
+  }
+  if (event.target.matches("[data-list-revaluation-excel-file]")) {
+    attachListRevaluationExcelFromInput(event.target);
     render();
     return;
   }
@@ -6828,12 +7212,12 @@ function createImportedCollateral(row) {
   const contract = getContractByNumber(row.contract);
   const id = row.collateralId || getNextCollateralId();
   const type = row.type || "Оборудование";
-  const owner = row.owner || contract?.clientName || "Клиент из Excel";
+  const owner = row.owner || contract?.clientName || "Залогодатель из Excel";
   const clientId = contract?.inn || "525 955 5771";
   const gsz = contract?.gsz || `ГСЗ ${owner}`;
   const address = type === "Автотранспорт"
-    ? "Московская область, автобаза клиента, зона стоянки 4"
-    : "Московская область, складской комплекс клиента";
+    ? "Московская область, автобаза залогодателя, зона стоянки 4"
+    : "Московская область, складской комплекс залогодателя";
   const marketValue = type === "Автотранспорт" ? 720000000 : 1250000000;
   const pledgeValue = Math.round(marketValue * 0.8);
   return {
@@ -6847,7 +7231,7 @@ function createImportedCollateral(row) {
     address,
     description: type === "Автотранспорт"
       ? "Грузовой автотранспорт из загруженной таблицы, VIN ожидает проверки через SpectrumData"
-      : `${type}: объект загружен из таблицы клиента`,
+      : `${type}: объект загружен из таблицы залогодателя`,
     contractIds: contract ? [contract.id] : [],
     status: "Загружен из Excel",
     source: "Excel",
